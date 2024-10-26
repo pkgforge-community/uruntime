@@ -13,15 +13,31 @@ rustup default nightly
 rustup target add x86_64-unknown-linux-musl
 rustup component add rust-src --toolchain nightly
 
+cargo xtask
+# Tasks:
+#     x86_64                     build x86_64 RunImage and AppImage uruntime
+#     runimage-x86_64            build x86_64 RunImage uruntime
+#     runimage-squashfs-x86_64   build x86_64 RunImage uruntime (SquashFS only)
+#     runimage-dwarfs-x86_64     build x86_64 RunImage uruntime (DwarFS only)
+#     appimage-x86_64            build x86_64 AppImage uruntime
+#     appimage-squashfs-x86_64   build x86_64 AppImage uruntime (SquashFS only)
+#     appimage-dwarfs-x86_64     build x86_64 AppImage uruntime (DwarFS only)
+#
+#     aarch64                     build aarch64 RunImage and AppImage uruntime
+#     runimage-aarch64            build aarch64 RunImage uruntime
+#     runimage-squashfs-aarch64   build aarch64 RunImage uruntime (SquashFS only)
+#     runimage-dwarfs-aarch64     build aarch64 RunImage uruntime (DwarFS only)
+#     appimage-aarch64            build aarch64 AppImage uruntime
+#     appimage-squashfs-aarch64   build aarch64 AppImage uruntime (SquashFS only)
+#     appimage-dwarfs-aarch64     build aarch64 AppImage uruntime (DwarFS only)
+# 
+#     all                         build all of the above
+
 # for RunImage x86_64
-cargo +nightly build --release --target x86_64-unknown-linux-musl -Z unstable-options -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort
-mv target/x86_64-unknown-linux-musl/release/uruntime uruntime-runimage-x86_64
-echo -ne 'RI\x02'|dd of=uruntime-runimage-x86_64 bs=1 count=3 seek=8 conv=notrunc
+cargo xtask runimage-x86_64
 
 # for AppImage x86_64
-cargo +nightly build --release --target x86_64-unknown-linux-musl -Z unstable-options -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --features appimage
-mv target/x86_64-unknown-linux-musl/release/uruntime uruntime-appimage-x86_64
-echo -ne 'AI\x02'|dd of=uruntime-appimage-x86_64 bs=1 count=3 seek=8 conv=notrunc
+cargo xtask appimage-aarch64
 ```
 See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.github/workflows/ci.yml#L34)
 

@@ -1,33 +1,28 @@
-use std::time::Instant;
-use std::process::exit;
-use io::{Error, Result};
-use std::process::Command;
-use std::env::current_exe;
-use io::ErrorKind::NotFound;
-use std::{env, fs, io, time};
-use std::path::{Path, PathBuf};
-use std::thread::{sleep, spawn};
-use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::{symlink, MetadataExt};
-use std::fs::{create_dir_all, read_to_string, remove_dir, remove_file, File};
+use std::{
+    time::Instant,
+    path::PathBuf,
+    process::{exit, Command},
+    thread::{sleep, spawn},
+    io::{Read, Seek, SeekFrom},
+    os::unix::fs::{symlink, MetadataExt},
+    {env::{self, current_exe}, fs, io, time},
+    fs::{create_dir, create_dir_all, read_to_string, remove_dir, remove_file, File},
+};
+use io::{ErrorKind::NotFound, Error, Result};
 
 use which::which;
 use cfg_if::cfg_if;
 use goblin::elf::Elf;
-use nix::libc::getuid;
-use nix::sys::wait::waitpid;
-use signal_hook::iterator::Signals;
-use nix::sys::signal::{Signal, kill};
 use memfd_exec::{MemFdExecutable, Stdio};
-use signal_hook::consts::{SIGINT, SIGTERM, SIGQUIT};
+use nix::sys::{wait::waitpid, signal::{Signal, kill}};
 use nix::unistd::{access, fork, getcwd, AccessFlags, ForkResult, Pid};
+use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT}, iterator::Signals};
 
 #[cfg(feature = "pie-ulexec")]
 mod pie_ulexec {
-    pub use std::ffi::CString;
-    pub use std::os::fd::AsRawFd;
     pub use goblin::elf::program_header;
     pub use nix::unistd::{close, write};
+    pub use std::{os::fd::AsRawFd, ffi::CString};
     pub use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
 }
 #[cfg(feature = "pie-ulexec")]
@@ -96,7 +91,7 @@ fn get_env_var(env_var: &str) -> String {
 }
 
 fn add_to_path(dir: &PathBuf) {
-    let old_path = get_env_var("PATH");    
+    let old_path = get_env_var("PATH");
     if old_path.is_empty() {
         env::set_var("PATH", dir)
     } else {
@@ -319,10 +314,10 @@ fn wait_mount(path: &PathBuf, timeout: time::Duration) -> bool {
     true
 }
 
-fn remove_mnt(ruid_dir: PathBuf, mnt_dir: PathBuf, mount_dir:PathBuf) {
-    let _ = remove_dir(&mount_dir);
-    let _ = remove_dir(&mnt_dir);
-    let _ = remove_dir(&ruid_dir);
+fn remove_mnt(mount_dirs: Vec<&PathBuf> ) {
+    for dir in mount_dirs {
+        let _ = remove_dir(dir);
+    }
 }
 
 fn mount_image(embed: Embed, image: Image, mount_dir: &PathBuf) {
@@ -361,14 +356,24 @@ fn extract_image(embed: Embed, image: Image) {
     cfg_if!{
         if #[cfg(feature = "appimage")] {
             let extract_dir = "AppDir";
+            let applink_dir = "squashfs-root";
         } else {
             let extract_dir = "RunDir";
         }
     }
-    if let Err(err) = create_dir_all(&extract_dir) {
+    if let Err(err) = create_dir(&extract_dir) {
         eprintln!("Failed to create extract dir: {err}: {}", &extract_dir);
         exit(1)
     }
+    #[cfg(feature = "appimage")]
+    {
+        let _ = remove_file(&applink_dir);
+        if let Err(err) = symlink(&extract_dir, &applink_dir) {
+            eprintln!("Failed to create squashfs-root symlink to extract dir: {err}");
+            exit(1)
+        }
+    }
+
     if image.is_dwar {
         #[cfg(feature = "dwarfs")]
         {
@@ -415,27 +420,30 @@ fn main() {
         exit(1)
     });
 
-    let uid = unsafe { getuid() };
-    let ruid_dir = env::temp_dir().join(format!(".r{uid}"));
-    let mnt_dir = ruid_dir.join("mnt");
-    let mount_dir = mnt_dir.join(random_string(8));
-
     let mut exec_args: Vec<String> = env::args().collect();
     let arg0 = exec_args.remove(0);
 
-    if !exec_args.is_empty() {
-        cfg_if!{
-            if #[cfg(feature = "appimage")] {
-                let arg_pfx = "appimage";
-            } else {
-                let arg_pfx = "runtime";
-            }
+    cfg_if!{
+        if #[cfg(feature = "appimage")] {
+            let arg_pfx = "appimage";
+            let mount_dir = env::temp_dir().join(random_string(8));
+            let mount_dirs = vec![&mount_dir];
+        } else {
+            let arg_pfx = "runtime";
+            let uid = unsafe { nix::libc::getuid() };
+            let ruid_dir = env::temp_dir().join(format!(".r{uid}"));
+            let mnt_dir = ruid_dir.join("mnt");
+            let mount_dir = mnt_dir.join(random_string(8));
+            let mount_dirs = vec![&mount_dir, &mnt_dir, &ruid_dir];
+
         }
+    }
+    if !exec_args.is_empty() {
         if exec_args[0] == format!("--{arg_pfx}-extract") {
             extract_image(embed, image);
             return
         }
-        if exec_args[0] == format!("--{arg_pfx}-extract") {
+        if exec_args[0] == format!("--{arg_pfx}-mount") {
             println!("{}", mount_dir.display());
             mount_image(embed, image, &mount_dir);
             return
@@ -445,17 +453,16 @@ fn main() {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child: child_pid }) => {
             if !wait_mount(&mount_dir, time::Duration::from_millis(500)) {
-                remove_mnt(ruid_dir, mnt_dir, mount_dir);
+                remove_mnt(mount_dirs);
                 exit(1)
             }
 
             cfg_if!{
                 if #[cfg(feature = "appimage")] {
-                    let run = format!("{}/AppRun", mount_dir.display());
-                    let run_path = Path::new(&run);
-                    if !run_path.is_file() {
-                        eprintln!("AppRun not found: {:?}", run_path);
-                        remove_mnt(ruid_dir, mnt_dir, mount_dir);
+                    let run = mount_dir.join("AppRun");
+                    if !run.is_file() {
+                        eprintln!("AppRun not found: {:?}", run);
+                        remove_mnt(mount_dirs);
                         exit(1)
                     };
                     env::set_var("ARGV0", arg0);
@@ -463,11 +470,10 @@ fn main() {
                     env::set_var("APPIMAGE", self_exe);
                     env::set_var("APPOFFSET", format!("{runtime_size}"));
                 } else {
-                    let run = format!("{}/static/bash", mount_dir.display());
-                    let run_path = Path::new(&run);
-                    if !run_path.is_file() {
-                        eprintln!("Static bash not found: {:?}", run_path);
-                        remove_mnt(ruid_dir, mnt_dir, mount_dir);
+                    let run = mount_dir.join("static").join("bash");
+                    if !run.is_file() {
+                        eprintln!("Static bash not found: {:?}", run);
+                        remove_mnt(mount_dirs);
                         exit(1)
                     };
                     exec_args.insert(0, format!("{}/Run.sh", mount_dir.display()));
@@ -507,7 +513,7 @@ fn main() {
             let _ = waitpid(child_pid, None);
             signals_handle.close();
 
-            remove_mnt(ruid_dir, mnt_dir, mount_dir);
+            remove_mnt(mount_dirs);
 
             exit(exit_code)
         }
