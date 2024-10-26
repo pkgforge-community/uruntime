@@ -37,7 +37,7 @@ cargo xtask
 cargo xtask runimage-x86_64
 
 # for AppImage x86_64
-cargo xtask appimage-aarch64
+cargo xtask appimage-x86_64
 ```
 See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.github/workflows/ci.yml#L34)
 
