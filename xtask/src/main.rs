@@ -131,7 +131,6 @@ fn add_magic(path: &PathBuf, magic: &str) -> Result<(), DynError> {
 fn build(bin: &str) -> Result<(), DynError> {
     create_dist_dir()?;
 
-    let arch: &str;
     let cargo: &str;
     let target: &str;
     let mut is_strip = true;
@@ -139,7 +138,6 @@ fn build(bin: &str) -> Result<(), DynError> {
 
     if bin.ends_with("aarch64") {
         cargo = "cross";
-        arch = "aarch64";
         is_strip = false;
         target = TARGET_AARCH64;
         build_args.append(&mut vec![
@@ -148,7 +146,6 @@ fn build(bin: &str) -> Result<(), DynError> {
         ])
     } else {
         cargo = "cargo";
-        arch = "x86_64";
         target = TARGET_X86_64;
         build_args.append(&mut vec![
             "+nightly", "build", "--release",
@@ -157,7 +154,6 @@ fn build(bin: &str) -> Result<(), DynError> {
             "-Z", "build-std-features=panic_immediate_abort"
         ])
     }
-    let bin = bin.replace(&format!("-{arch}"), "");
 
     let mut magic = "RI";
     if bin.contains("appimage") {
@@ -185,7 +181,7 @@ fn build(bin: &str) -> Result<(), DynError> {
         .join("release")
         .join(BIN_NAME);
 
-    let dst_bin_name = &format!("{BIN_NAME}-{bin}-{arch}");
+    let dst_bin_name = &format!("{BIN_NAME}-{bin}");
     let dst = dist_dir().join(dst_bin_name);
 
     rename(&src, &dst)?;
