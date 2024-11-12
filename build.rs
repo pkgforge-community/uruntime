@@ -1,10 +1,13 @@
-use std::path::Path;
-use std::process::exit;
-use std::{env, process::Command};
-use std::os::unix::fs::{symlink, PermissionsExt};
-use std::fs::{create_dir, metadata, remove_file, set_permissions};
+use std::{
+    env,
+    path::Path,
+    process::{exit, Command},
+    os::unix::fs::{symlink, PermissionsExt},
+    fs::{create_dir, remove_file, set_permissions, Permissions}
+};
 
 use indexmap::IndexMap;
+
 
 fn main() {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
@@ -46,10 +49,7 @@ fn main() {
                 exit(1)
             }
 
-            let mut permissions = metadata(&asset_path)
-                .expect(&format!("Unable to read metadata: {asset}")).permissions();
-            permissions.set_mode(0o755);
-            set_permissions(&asset_path, permissions)
+            set_permissions(&asset_path, Permissions::from_mode(0o755))
                 .expect(&format!("Unable to set permissions: {asset}"));
         }
 

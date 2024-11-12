@@ -1,14 +1,14 @@
 use std::{
-    time::Instant,
     path::PathBuf,
-    process::{exit, Command},
     thread::{sleep, spawn},
+    process::{exit, Command},
+    time::{Instant, Duration},
     io::{Read, Seek, SeekFrom},
     os::unix::fs::{symlink, MetadataExt},
-    {env::{self, current_exe}, fs, io, time},
+    {env::{self, current_exe}, fs, time},
+    io::{ErrorKind::NotFound, Error, Result},
     fs::{create_dir, create_dir_all, read_to_string, remove_dir, remove_file, File},
 };
-use io::{ErrorKind::NotFound, Error, Result};
 
 use which::which;
 use cfg_if::cfg_if;
@@ -16,7 +16,7 @@ use goblin::elf::Elf;
 use memfd_exec::{MemFdExecutable, Stdio};
 use nix::sys::{wait::waitpid, signal::{Signal, kill}};
 use nix::unistd::{access, fork, getcwd, AccessFlags, ForkResult, Pid};
-use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT}, iterator::Signals};
+use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals};
 
 #[cfg(feature = "pie-ulexec")]
 mod pie_ulexec {
@@ -58,6 +58,7 @@ struct Image {
     is_squash: bool,
     is_dwar: bool,
 }
+
 
 fn get_image(path: &PathBuf, offset: u64) -> Result<Image> {
     let mut file = File::open(path)?;
@@ -167,38 +168,26 @@ fn is_pie(bytes: &Vec<u8>) -> bool {
 }
 
 fn get_runtime_size(path: &PathBuf) -> Result<u64> {
-    const MAX_SIZE: usize = 20971520;   // 20 MB
-    const BUFFER_SIZE: usize = 1048576; // 1 MB
-    let mut runtime = File::open(path)?;
-    let mut buffer = Vec::with_capacity(MAX_SIZE);
-    let mut total_read = 0;
-    loop {
-        if total_read >= MAX_SIZE {
-            return Err(Error::new(std::io::ErrorKind::InvalidInput,
-                format!("Reached ELF runtime MAX_SIZE buffer limit of {} MB", MAX_SIZE / 1024 / 1024)
-            ));
-        }
-        let mut chunk = [0; BUFFER_SIZE];
-        let bytes_read = runtime.read(&mut chunk)?;
-        if bytes_read == 0 {
-            return Err(Error::new(std::io::ErrorKind::UnexpectedEof,
-                format!("Reached end of file: {:?}", path)
-            ));
-        }
-        buffer.extend_from_slice(&chunk[..bytes_read]);
-        total_read += bytes_read;
-        if let Ok(elf) = Elf::parse(&buffer) {
-            let ehdr = elf.header;
-            let sht_end = ehdr.e_shoff + (ehdr.e_shentsize as u64 * ehdr.e_shnum as u64);
-            let last_shdr = elf.section_headers.last().unwrap();
-            let last_section_end = last_shdr.sh_offset + last_shdr.sh_size;
-            return if sht_end > last_section_end {
-                Ok(sht_end)
-            } else {
-                Ok(last_section_end)
-            }
-        } else { continue }
-    }
+    let mut file = File::open(path)?;
+    let mut elf_header_raw = [0; 64];
+    file.read_exact(&mut elf_header_raw)?;
+    let section_table_offset = u64::from_le_bytes(elf_header_raw[40..48].try_into().unwrap()); // e_shoff
+    let section_count = u16::from_le_bytes(elf_header_raw[60..62].try_into().unwrap()); // e_shnum
+    let section_table_size = section_count as u64 * 64;
+    let required_bytes = section_table_offset + section_table_size;
+    let mut header_data = vec![0; required_bytes as usize];
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut header_data)?;
+    let elf = Elf::parse(&header_data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let section_table_end =
+        elf.header.e_shoff + (elf.header.e_shentsize as u64 * elf.header.e_shnum as u64);
+    let last_section_end = elf
+        .section_headers
+        .last()
+        .map(|section| section.sh_offset + section.sh_size)
+        .unwrap_or(0);
+    Ok(section_table_end.max(last_section_end))
 }
 
 fn random_string(length: usize) -> String {
@@ -269,7 +258,7 @@ fn embed_exec(exec_name: &str, exec_bytes: Vec<u8>, exec_args: Vec<String>) {
                                 CString::new(format!("{}={}", key, value)).unwrap()
                         ).collect();
                         spawn(move || {
-                            sleep(time::Duration::from_millis(1));
+                            sleep(Duration::from_millis(1));
                             close(memfd_raw).unwrap()
                         });
                         userland_execve::exec(
@@ -302,14 +291,14 @@ fn is_mount_point(path: &PathBuf) -> Result<bool> {
     }
 }
 
-fn wait_mount(path: &PathBuf, timeout: time::Duration) -> bool {
+fn wait_mount(path: &PathBuf, timeout: Duration) -> bool {
     let start_time = Instant::now();
     while !path.exists() || !is_mount_point(path).unwrap_or(false) {
         if start_time.elapsed() >= timeout {
             eprintln!("Timeout reached while waiting for mount: {:?}", path);
             return false
         }
-        sleep(time::Duration::from_millis(1))
+        sleep(Duration::from_millis(1))
     }
     true
 }
@@ -452,7 +441,7 @@ fn main() {
 
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child: child_pid }) => {
-            if !wait_mount(&mount_dir, time::Duration::from_millis(500)) {
+            if !wait_mount(&mount_dir, Duration::from_millis(1000)) {
                 remove_mnt(mount_dirs);
                 exit(1)
             }
@@ -494,7 +483,7 @@ fn main() {
             spawn(move || {
                 for signal in signals.forever() {
                     match signal {
-                        SIGINT | SIGTERM | SIGQUIT => {
+                        SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
                             let _ = kill(pid, Signal::SIGTERM);
                             break
                         }
