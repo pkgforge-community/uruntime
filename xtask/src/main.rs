@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     io::{Seek, SeekFrom, Write},
     process::{exit, Command, Stdio},
-    fs::{create_dir_all, rename, OpenOptions},
+    fs::{File, create_dir_all, remove_file, rename, OpenOptions},
 };
 
 
@@ -115,6 +115,48 @@ fn strip(path: &PathBuf) -> Result<(), DynError> {
     Ok(())
 }
 
+fn add_sections(path: &PathBuf) -> Result<(), DynError> {
+    if Command::new("llvm-objcopy")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .status()
+        .is_ok()
+    {
+        eprint!(" add sections: ");
+        let new_sections = vec![
+            ".digest_md5",
+            ".upd_info",
+            ".sha256_sig",
+            ".sig_key",
+        ];
+
+        let emptydata = PathBuf::from("emptydata");
+        for section_name in new_sections {
+            let mut section_data = format!("data{section_name}");
+            if !Path::new(&section_data).exists() {
+                if !emptydata.exists() {
+                    File::create(&emptydata)?;
+                }
+                section_data = emptydata.to_str().unwrap().to_string()
+            }
+            let status = Command::new("llvm-objcopy").args([
+                &format!("--add-section={section_name}={section_data}"),
+                &format!("--set-section-flags={section_name}=noload,readonly"),
+            ]).arg(&path).status()?;
+            if !status.success() {
+                Err("failed to add sections")?;
+            }
+        }
+        if emptydata.exists() {
+            remove_file(emptydata)?;
+        }
+        eprint!("OK");
+    } else {
+        eprintln!("no `llvm-objcopy` utility found!")
+    }
+    Ok(())
+}
+
 fn add_magic(path: &PathBuf, magic: &str) -> Result<(), DynError> {
     eprint!(" embed magic: ");
     let magic = format!("{}\x02", magic);
@@ -190,6 +232,8 @@ fn build(bin: &str) -> Result<(), DynError> {
     if is_strip {
         strip(&dst)?;
     }
+
+    add_sections(&dst)?;
 
     add_magic(&dst, magic)?;
 

@@ -21,8 +21,10 @@ fn main() {
 
     let assets = IndexMap::from([
         ("upx", format!("https://bin.ajam.dev/{arch}/upx")),
+        ("tar", format!("https://bin.ajam.dev/{arch}/Baseutils/tar/tar")),
         ("squashfuse", format!("https://bin.ajam.dev/{arch}/squashfuse")),
         ("unsquashfs", format!("https://bin.ajam.dev/{arch}/Baseutils/squashfstools/unsquashfs")),
+        ("mksquashfs", format!("https://bin.ajam.dev/{arch}/Baseutils/squashfstools/mksquashfs")),
         ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.10.1/dwarfs-universal-0.10.1-Linux-{arch}-clang")),
     ]);
 
@@ -55,8 +57,8 @@ fn main() {
 
         if !asset.ends_with("upx") && !asset_upx_path.exists() {
             let output = Command::new(&upx).args([
-                "--force-overwrite", "-9", "--best", 
-                asset_path.to_str().unwrap(), "-o", 
+                "--force-overwrite", "-9", "--best",
+                asset_path.to_str().unwrap(), "-o",
                 asset_upx_path.to_str().unwrap()
             ]).output().expect(&format!("Failed to execute upx: {asset}"));
 
