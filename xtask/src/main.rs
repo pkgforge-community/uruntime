@@ -42,7 +42,7 @@ fn try_main() -> Result<(), DynError> {
     let arg = arg.as_str();
 
     if all_bins.contains(&arg) {
-        build(&arg)?;
+        build(arg)?;
         return Ok(())
     }
 
@@ -68,7 +68,7 @@ fn try_main() -> Result<(), DynError> {
 }
 
 fn create_dist_dir() -> Result<(), DynError> {
-    create_dir_all(&dist_dir())?;
+    create_dir_all(dist_dir())?;
     Ok(())
 }
 
@@ -104,7 +104,7 @@ fn strip(path: &PathBuf) -> Result<(), DynError> {
         let status = Command::new("strip").args([
             "-s", "-R", ".comment", "-R", ".gnu.version",
             "--strip-unneeded"
-        ]).arg(&path).status()?;
+        ]).arg(path).status()?;
         if !status.success() {
             Err("strip failed")?;
         }
@@ -142,7 +142,7 @@ fn add_sections(path: &PathBuf) -> Result<(), DynError> {
             let status = Command::new("llvm-objcopy").args([
                 &format!("--add-section={section_name}={section_data}"),
                 &format!("--set-section-flags={section_name}=noload,readonly"),
-            ]).arg(&path).status()?;
+            ]).arg(path).status()?;
             if !status.success() {
                 Err("failed to add sections")?;
             }
@@ -163,9 +163,10 @@ fn add_magic(path: &PathBuf, magic: &str) -> Result<(), DynError> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
     file.seek(SeekFrom::Start(8))?;
-    file.write_all(&magic[..3].as_bytes())?;
+    file.write_all(magic[..3].as_bytes())?;
     eprint!("OK");
     Ok(())
 }
@@ -237,7 +238,7 @@ fn build(bin: &str) -> Result<(), DynError> {
 
     add_magic(&dst, magic)?;
 
-    eprintln!("");
+    eprintln!();
     Ok(())
 }
 

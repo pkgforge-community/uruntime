@@ -66,8 +66,8 @@ impl Embed {
         }
     }
 
-    fn embed_exec(&self, exec_name: &str, exec_bytes: &Vec<u8>, exec_args: Vec<String>) {
-        MemFdExecutable::new(exec_name, &exec_bytes)
+    fn embed_exec(&self, exec_name: &str, exec_bytes: &[u8], exec_args: Vec<String>) {
+        MemFdExecutable::new(exec_name, exec_bytes)
             .args(exec_args)
             .envs(env::vars())
             .exec(Stdio::inherit());
@@ -163,9 +163,9 @@ fn get_image(path: &PathBuf, offset: u64) -> Result<Image> {
 }
 
 fn get_env_var(env_var: &str) -> String {
-    let mut ret = "".to_string();
-    if let Ok(res) = env::var(env_var) { ret = res };
-    return ret
+    if let Ok(value) = env::var(env_var) {
+        value
+    } else {"".into()}
 }
 
 fn add_to_path(path: &PathBuf) {
@@ -195,20 +195,19 @@ fn check_fuse() {
             }
             add_to_path(tmp_path_dir);
         }
-        let fsmntlink_path = tmp_path_dir.join(basename(&fusermount_prog));
+        let fsmntlink_path = tmp_path_dir.join(basename(fusermount_prog));
         let _ = remove_file(&fsmntlink_path);
         if let Err(err) = symlink(fusermount_prog, &fsmntlink_path) {
             eprintln!("Failed to create fusermount symlink: {err}: {:?}", fsmntlink_path);
             exit(1)
         }
     } else {
-        for fusermount in vec!["fusermount", "fusermount3"] {
-            let fallback: &str;
-            if fusermount.ends_with("3") {
-                fallback = "fusermount"
+        for fusermount in ["fusermount", "fusermount3"] {
+            let fallback: &str = if fusermount.ends_with("3") {
+                "fusermount"
             } else {
-                fallback = "fusermount3"
-            }
+                "fusermount3"
+            };
             if which(fusermount).is_err() {
                 if let Ok(fusermount_path) = which(fallback) {
                     if !tmp_path_dir.is_dir() {
@@ -234,7 +233,7 @@ fn check_fuse() {
     if access("/dev/fuse", AccessFlags::R_OK).is_err() ||
        access("/dev/fuse", AccessFlags::W_OK).is_err() || !is_fusermount {
         eprintln!("{}: failed to utilize FUSE during startup", std::env::args().next().unwrap());
-        cfg_if!{
+        cfg_if! {
             if #[cfg(feature = "appimage")] {
                 let arg_pfx = "appimage";
                 let self_name = "AppImage";
@@ -295,7 +294,7 @@ fn random_string(length: usize) -> String {
 
 fn basename(path: &str) -> String {
     let pieces: Vec<&str> = path.rsplit('/').collect();
-    pieces.get(0).unwrap().to_string()
+    pieces.first().unwrap().to_string()
 }
 
 fn is_mount_point(path: &PathBuf) -> Result<bool> {
@@ -330,7 +329,7 @@ fn remove_mnt(mount_dirs: Vec<&PathBuf> ) {
 
 fn mount_image(embed: &Embed, image: &Image, mount_dir: &PathBuf) {
     check_fuse();
-    if let Err(err) = create_dir_all(&mount_dir) {
+    if let Err(err) = create_dir_all(mount_dir) {
         eprintln!("Failed to create mount dir: {err}: {:?}", mount_dir);
         exit(1)
     }
@@ -367,7 +366,7 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: &PathBuf) {
 
 fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extract_run: bool, pattern: Option<&String>) {
     if is_extract_run && extract_dir.exists() { return }
-    cfg_if!{
+    cfg_if! {
         if #[cfg(feature = "appimage")] {
             let applink_dir = extract_dir.join("squashfs-root");
             if !is_extract_run {
@@ -404,10 +403,10 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
                 format!("--image-offset={}", image.offset),
                 format!("--num-workers={}", num_cpus::get())
             ];
-            if pattern.is_some() {
+            if let Some(pattern) = pattern {
                 let tar_args = vec![
                     "-C".into(), extract_dir, "-xvf-".into(),
-                    "--wildcards".into(), pattern.unwrap().into()
+                    "--wildcards".into(), pattern.into()
                 ];
                 exec_args.push("--format=ustar".into());
                 if let Ok(dwarfsextract) = MemFdExecutable::new("dwarfsextract", &embed.dwarfs_universal)
@@ -446,8 +445,8 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
                 "-o".into(), image.offset.to_string(),
                 image_path
             ];
-            if pattern.is_some() {
-                exec_args.push(pattern.unwrap().into());
+            if let Some(pattern) = pattern {
+                exec_args.push(pattern.into())
             }
             embed.unsquashfs(exec_args)
         }
@@ -471,7 +470,7 @@ fn try_set_portable(kind: &str, dir: &PathBuf) {
 }
 
 fn signals_handler(pid: Pid) {
-    let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT]).unwrap();
+    let mut signals = Signals::new([SIGINT, SIGTERM, SIGQUIT]).unwrap();
     let _ = signals.handle();
     for signal in signals.forever() {
         match signal {
@@ -511,7 +510,7 @@ fn hash_string(data: &str) -> String {
 }
 
 fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
-    cfg_if!{
+    cfg_if! {
         if #[cfg(feature = "appimage")] {
             let arg_pfx = "appimage";
             let self_name = "AppImage";
@@ -593,7 +592,7 @@ fn main() {
 
     #[allow(unused_mut)]
     let mut self_exe = &current_exe().unwrap();
-    cfg_if!{
+    cfg_if! {
         if #[cfg(feature = "appimage")] {
             let target_appimage = PathBuf::from(get_env_var("TARGET_APPIMAGE"));
             if target_appimage.is_file() {
@@ -647,7 +646,7 @@ fn main() {
     let mut tmp_dir = PathBuf::from(get_env_var("TMPDIR"));
     if !tmp_dir.exists() { tmp_dir = env::temp_dir() }
 
-    cfg_if!{
+    cfg_if! {
         if #[cfg(feature = "appimage")] {
             let arg_pfx = "appimage";
             if get_env_var("APPIMAGE_EXTRACT_AND_RUN") == "1" {
@@ -764,19 +763,18 @@ fn main() {
     }
     drop(runtime);
 
-    let image = get_image(&self_exe, runtime_size).unwrap_or_else(|err|{
+    let image = get_image(self_exe, runtime_size).unwrap_or_else(|err|{
         eprintln!("Failed to get image: {err}");
         exit(1)
     });
 
-    cfg_if!{
+    cfg_if! {
         if #[cfg(feature = "appimage")] {
-            let mnt_name: String;
-            if is_extract_run {
-                mnt_name = format!("appimage_extracted_{}", hash_string(&self_exe.to_string_lossy()))
+            let mnt_name: String = if is_extract_run {
+                format!("appimage_extracted_{}", hash_string(&self_exe.to_string_lossy()))
             } else {
-                mnt_name = format!(".mount_{}", random_string(8))
-            }
+                format!(".mount_{}", random_string(8))
+            };
             let mount_dir = tmp_dir.join(mnt_name);
             let mount_dirs = vec![&mount_dir];
         } else {
@@ -815,17 +813,15 @@ fn main() {
                 if let Err(err) = waitpid(child_pid, None) {
                     eprintln!("Failed to extract image: {err}");
                     exit(1)
-                };
-            } else {
-                if !wait_mount(&mount_dir, Duration::from_millis(1000)) {
-                    remove_mnt(mount_dirs);
-                    exit(1)
                 }
+            } else if !wait_mount(&mount_dir, Duration::from_millis(1000)) {
+                remove_mnt(mount_dirs);
+                exit(1)
             }
 
             let mut exit_code = 143;
             if !is_mount_only {
-                cfg_if!{
+                cfg_if! {
                     if #[cfg(feature = "appimage")] {
                         let run = mount_dir.join("AppRun");
                         if !run.is_file() {

@@ -44,7 +44,7 @@ fn main() {
                 "--insecure",
                 "-L", assets.get(asset).unwrap(),
                 "-o", asset_path.to_str().unwrap()
-            ]).output().expect(&format!("Failed to execute curl: {asset}"));
+            ]).output().unwrap_or_else(|_| panic!("Failed to execute curl: {asset}"));
 
             if !output.status.success() {
                 eprintln!("Failed to get asset: {}", String::from_utf8_lossy(&output.stderr));
@@ -52,7 +52,7 @@ fn main() {
             }
 
             set_permissions(&asset_path, Permissions::from_mode(0o755))
-                .expect(&format!("Unable to set permissions: {asset}"));
+                .unwrap_or_else(|_| panic!("Unable to set permissions: {asset}"));
         }
 
         if !asset.ends_with("upx") && !asset_upx_path.exists() {
@@ -60,7 +60,7 @@ fn main() {
                 "--force-overwrite", "-9", "--best",
                 asset_path.to_str().unwrap(), "-o",
                 asset_upx_path.to_str().unwrap()
-            ]).output().expect(&format!("Failed to execute upx: {asset}"));
+            ]).output().unwrap_or_else(|_| panic!("Failed to execute upx: {asset}"));
 
             if !output.status.success() {
                 eprintln!("Failed to upx asset: {}", String::from_utf8_lossy(&output.stderr));
