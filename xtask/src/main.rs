@@ -110,7 +110,7 @@ fn strip(path: &PathBuf) -> Result<(), DynError> {
         }
         eprint!("OK");
     } else {
-        eprintln!("no `strip` utility found!")
+        Err("no `strip` utility found!")?;
     }
     Ok(())
 }
@@ -152,7 +152,7 @@ fn add_sections(path: &PathBuf) -> Result<(), DynError> {
         }
         eprint!("OK");
     } else {
-        eprintln!("no `llvm-objcopy` utility found!")
+        Err("no `llvm-objcopy` utility found!")?;
     }
     Ok(())
 }
