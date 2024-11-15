@@ -27,7 +27,7 @@ jobs:
 
       - name: Install deps
         run: >
-          sudo bash -c 'apt update && apt install binutils curl musl-tools qemu-user-static -y';
+          sudo bash -c 'apt update && apt install binutils curl musl-tools qemu-user-static llvm -y';
           rustup component add rust-src --toolchain nightly;
           cargo install cross;
 
