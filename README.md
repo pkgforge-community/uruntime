@@ -63,7 +63,6 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
       --runtime-squashfuse    [ARGS]       Launch squashfuse
       --runtime-unsquashfs    [ARGS]       Launch unsquashfs
       --runtime-mksquashfs    [ARGS]       Launch mksquashfs
-      --runtime-tar           [ARGS]       Launch tar
       --runtime-dwarfs        [ARGS]       Launch dwarfs
       --runtime-dwarfsck      [ARGS]       Launch dwarfsck
       --runtime-mkdwarfs      [ARGS]       Launch mkdwarfs
@@ -119,7 +118,6 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
       --appimage-squashfuse    [ARGS]       Launch squashfuse
       --appimage-unsquashfs    [ARGS]       Launch unsquashfs
       --appimage-mksquashfs    [ARGS]       Launch mksquashfs
-      --appimage-tar           [ARGS]       Launch tar
       --appimage-dwarfs        [ARGS]       Launch dwarfs
       --appimage-dwarfsck      [ARGS]       Launch dwarfsck
       --appimage-mkdwarfs      [ARGS]       Launch mkdwarfs

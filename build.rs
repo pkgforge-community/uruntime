@@ -17,15 +17,12 @@ fn main() {
 
     let assets_path = project_path.join(format!("assets-{arch}"));
     let assets_path_link = project_path.join("assets");
-    let upx = assets_path.join("upx");
 
     let assets = IndexMap::from([
-        ("upx", format!("https://bin.ajam.dev/{arch}/upx")),
-        ("tar", format!("https://bin.ajam.dev/{arch}/Baseutils/tar/tar")),
-        ("squashfuse", format!("https://bin.ajam.dev/{arch}/squashfuse")),
-        ("unsquashfs", format!("https://bin.ajam.dev/{arch}/Baseutils/squashfstools/unsquashfs")),
-        ("mksquashfs", format!("https://bin.ajam.dev/{arch}/Baseutils/squashfstools/mksquashfs")),
-        ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.10.1/dwarfs-universal-0.10.1-Linux-{arch}-clang")),
+        ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.5.2.r6.g4289904/squashfuse-{arch}-upx")),
+        ("unsquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.r569.gc732a99/unsquashfs-{arch}-upx")),
+        ("mksquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.r569.gc732a99/mksquashfs-{arch}-upx")),
+        ("dwarfs-universal-upx", format!("https://github.com/VHSgunzo/dwarfs-universal-artifacts/releases/download/v0.10.1-153-gab3e199f79/dwarfs-universal-Linux-{arch}-clang-O2")),
     ]);
 
     if !assets_path.exists() {
@@ -44,7 +41,7 @@ fn main() {
                 "--insecure",
                 "-L", assets.get(asset).unwrap(),
                 "-o", asset_path.to_str().unwrap()
-            ]).output().unwrap_or_else(|_| panic!("Failed to execute curl: {asset}"));
+            ]).output().unwrap_or_else(|err| panic!("Failed to execute curl: {err}: {asset}"));
 
             if !output.status.success() {
                 eprintln!("Failed to get asset: {}", String::from_utf8_lossy(&output.stderr));
@@ -52,15 +49,15 @@ fn main() {
             }
 
             set_permissions(&asset_path, Permissions::from_mode(0o755))
-                .unwrap_or_else(|_| panic!("Unable to set permissions: {asset}"));
+                .unwrap_or_else(|err| panic!("Unable to set permissions: {err}: {asset}"));
         }
 
         if !asset.ends_with("upx") && !asset_upx_path.exists() {
-            let output = Command::new(&upx).args([
+            let output = Command::new("upx").args([
                 "--force-overwrite", "-9", "--best",
                 asset_path.to_str().unwrap(), "-o",
                 asset_upx_path.to_str().unwrap()
-            ]).output().unwrap_or_else(|_| panic!("Failed to execute upx: {asset}"));
+            ]).output().unwrap_or_else(|err| panic!("Failed to execute upx: {err}: {asset}"));
 
             if !output.status.success() {
                 eprintln!("Failed to upx asset: {}", String::from_utf8_lossy(&output.stderr));

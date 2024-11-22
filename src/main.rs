@@ -5,9 +5,9 @@ use std::{
     env::{self, current_exe},
     time::{self, Duration, Instant},
     hash::{DefaultHasher, Hash, Hasher},
-    os::unix::fs::{symlink, MetadataExt},
+    os::unix::{prelude::PermissionsExt, fs::{symlink, MetadataExt}},
     io::{Error, ErrorKind::{NotFound, InvalidData}, Read, Result, Seek, SeekFrom},
-    fs::{self, create_dir, create_dir_all, read_to_string, remove_dir, remove_dir_all, remove_file, File},
+    fs::{self, File, Permissions, create_dir, create_dir_all, read_to_string, remove_dir, remove_dir_all, remove_file, set_permissions},
 };
 
 use which::which;
@@ -45,8 +45,6 @@ struct Embed {
     #[cfg(feature = "squashfs")]
     mksquashfs: Vec<u8>,
     #[cfg(feature = "dwarfs")]
-    tar: Vec<u8>,
-    #[cfg(feature = "dwarfs")]
     dwarfs_universal: Vec<u8>,
 }
 
@@ -59,8 +57,6 @@ impl Embed {
             unsquashfs: include_bytes!("../assets/unsquashfs-upx").to_vec(),
             #[cfg(feature = "squashfs")]
             mksquashfs: include_bytes!("../assets/mksquashfs-upx").to_vec(),
-            #[cfg(feature = "dwarfs")]
-            tar: include_bytes!("../assets/tar-upx").to_vec(),
             #[cfg(feature = "dwarfs")]
             dwarfs_universal: include_bytes!("../assets/dwarfs-universal-upx").to_vec(),
         }
@@ -112,11 +108,6 @@ impl Embed {
     fn dwarfs_universal(&self, exec_args: Vec<String>) {
         self.embed_exec("dwarfs-universal", &self.dwarfs_universal, exec_args);
     }
-
-    #[cfg(feature = "dwarfs")]
-    fn tar(&self, exec_args: Vec<String>) {
-        self.embed_exec("tar", &self.tar, exec_args);
-    }
 }
 
 fn check_memfd_noexec() {
@@ -139,33 +130,31 @@ fn check_memfd_noexec() {
 
 fn get_image(path: &PathBuf, offset: u64) -> Result<Image> {
     let mut file = File::open(path)?;
-    let mut buffer = [0; 4];
+    let mut buff = [0u8; 4];
     file.seek(SeekFrom::Start(offset))?;
-    let bytes_read = file.read(&mut buffer)?;
-    let mut result = Image {
+    let bytes_read = file.read(&mut buff)?;
+    let mut image = Image {
         path: path.to_path_buf(),
         offset,
         is_dwar: false,
         is_squash: false
     };
     if bytes_read == 4 {
-        let read_str = String::from_utf8_lossy(&buffer);
+        let read_str = String::from_utf8_lossy(&buff);
         if read_str.contains("DWAR") {
-            result.is_dwar = true
+            image.is_dwar = true
         } else if read_str.contains("hsqs") {
-            result.is_squash = true
+            image.is_squash = true
         }
     }
-    if !result.is_squash && !result.is_dwar {
+    if !image.is_squash && !image.is_dwar {
         return Err(Error::new(NotFound, "SquashFS or DwarFS image not found!"))
     }
-    Ok(result)
+    Ok(image)
 }
 
-fn get_env_var(env_var: &str) -> String {
-    if let Ok(value) = env::var(env_var) {
-        value
-    } else {"".into()}
+fn get_env_var(var: &str) -> String {
+    env::var(var).unwrap_or("".into())
 }
 
 fn add_to_path(path: &PathBuf) {
@@ -232,7 +221,7 @@ fn check_fuse() {
     }
     if access("/dev/fuse", AccessFlags::R_OK).is_err() ||
        access("/dev/fuse", AccessFlags::W_OK).is_err() || !is_fusermount {
-        eprintln!("{}: failed to utilize FUSE during startup", std::env::args().next().unwrap());
+        eprintln!("{}: failed to utilize FUSE during startup", env::args().next().unwrap());
         cfg_if! {
             if #[cfg(feature = "appimage")] {
                 let arg_pfx = "appimage";
@@ -321,19 +310,28 @@ fn wait_mount(path: &PathBuf, timeout: Duration) -> bool {
     true
 }
 
-fn remove_mnt(mount_dirs: Vec<&PathBuf> ) {
-    for dir in mount_dirs {
+fn remove_tmp_dirs(dirs: Vec<&PathBuf> ) {
+    for dir in dirs {
         let _ = remove_dir(dir);
     }
 }
 
-fn mount_image(embed: &Embed, image: &Image, mount_dir: &PathBuf) {
-    check_fuse();
-    if let Err(err) = create_dir_all(mount_dir) {
-        eprintln!("Failed to create mount dir: {err}: {:?}", mount_dir);
-        exit(1)
+fn create_tmp_dirs(dirs: Vec<&PathBuf>) -> Result<()> {
+    if let Some(dir) = dirs.first() {
+        create_dir_all(dir)?;
+        for dir in dirs {
+            set_permissions(dir, Permissions::from_mode(0o700))?
+        }
+        return Ok(());
     }
+    Err(Error::last_os_error())
+}
 
+fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
+    check_fuse();
+
+    let uid = unsafe { nix::libc::getuid() };
+    let gid = unsafe { nix::libc::getgid() };
     let mount_dir = mount_dir.to_str().unwrap().to_string();
     let image_path = image.path.to_str().unwrap().to_string();
     if image.is_dwar {
@@ -341,7 +339,8 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: &PathBuf) {
         {
             let num_threads = num_cpus::get();
             embed.dwarfs(vec!["-f".into(),
-                "-o".into(), "ro,nodev,noatime".into(),
+                "-o".into(), "ro,nodev,noatime,clone_fd".into(),
+                "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset),
                 "-o".into(), format!("workers={num_threads}"),
                 "-o".into(), format!("max_threads={num_threads}"),
@@ -352,11 +351,9 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: &PathBuf) {
     } else {
         #[cfg(feature = "squashfs")]
         {
-            let uid = unsafe { nix::libc::getuid() };
-            let gid = unsafe { nix::libc::getgid() };
             embed.squashfuse(vec!["-f".into(),
                 "-o".into(), "ro,nodev,noatime".into(),
-                "-o".into(), format!("uid={},gid={}", uid, gid),
+                "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset),
                 image_path, mount_dir
             ])
@@ -365,7 +362,14 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: &PathBuf) {
 }
 
 fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extract_run: bool, pattern: Option<&String>) {
-    if is_extract_run && extract_dir.exists() { return }
+    if is_extract_run {
+        if let Ok(dir) = extract_dir.read_dir() {
+            if dir.flatten().any(|entry|entry.path().exists()) {
+                return
+            }
+        }
+    }
+
     cfg_if! {
         if #[cfg(feature = "appimage")] {
             let applink_dir = extract_dir.join("squashfs-root");
@@ -383,16 +387,16 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
         eprintln!("Failed to create extract dir: {err}: {extract_dir}");
         exit(1)
     }
-        #[cfg(feature = "appimage")]
-        {
-            if !is_extract_run {
-                let _ = remove_file(&applink_dir);
-                if let Err(err) = symlink(&extract_dir, &applink_dir) {
-                    eprintln!("Failed to create squashfs-root symlink to extract dir: {err}");
-                    exit(1)
-                }
+    #[cfg(feature = "appimage")]
+    {
+        if !is_extract_run {
+            let _ = remove_file(&applink_dir);
+            if let Err(err) = symlink(&extract_dir, &applink_dir) {
+                eprintln!("Failed to create squashfs-root symlink to extract dir: {err}");
+                exit(1)
             }
         }
+    }
     let image_path = image.path.to_str().unwrap().to_string();
     if image.is_dwar {
         #[cfg(feature = "dwarfs")]
@@ -401,41 +405,14 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
                 "--input".into(), image_path,
                 "--log-level=error".into(),
                 format!("--image-offset={}", image.offset),
-                format!("--num-workers={}", num_cpus::get())
+                format!("--num-workers={}", num_cpus::get()),
+                "--output".into(), extract_dir,
+                "--stdout-progress".into()
             ];
             if let Some(pattern) = pattern {
-                let tar_args = vec![
-                    "-C".into(), extract_dir, "-xvf-".into(),
-                    "--wildcards".into(), pattern.into()
-                ];
-                exec_args.push("--format=ustar".into());
-                if let Ok(dwarfsextract) = MemFdExecutable::new("dwarfsextract", &embed.dwarfs_universal)
-                    .args(exec_args)
-                    .stdout(Stdio::piped())
-                    .spawn() {
-                        if let Ok(mut tar) = MemFdExecutable::new("tar", &embed.tar)
-                            .args(tar_args)
-                            .stdin(Stdio::piped())
-                            .spawn() {
-                            let mut dwarfsextract_stdout = dwarfsextract.stdout.unwrap();
-                            let mut tar_stdin = tar.stdin.take().unwrap();
-                            let _ = std::io::copy(&mut dwarfsextract_stdout, &mut tar_stdin);
-                            exit(tar.wait().unwrap().code().unwrap())
-                        } else {
-                            eprintln!("Failed to run tar!");
-                            exit(1)
-                        }
-                } else {
-                    eprintln!("Failed to run dwarfsextract!");
-                    exit(1)
-                }
-            } else {
-                exec_args.append(&mut vec![
-                    "--output".into(), extract_dir,
-                    "--stdout-progress".into()
-                ]);
-                embed.dwarfsextract(exec_args)
+                exec_args.append(&mut vec!["--pattern".into(), pattern.to_string()]);
             }
+            embed.dwarfsextract(exec_args)
         }
     } else {
         #[cfg(feature = "squashfs")]
@@ -544,8 +521,6 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     #[cfg(feature = "squashfs")]
     println!("      --{arg_pfx}-mksquashfs    [ARGS]       Launch mksquashfs");
     #[cfg(feature = "dwarfs")]
-    println!("      --{arg_pfx}-tar           [ARGS]       Launch tar");
-    #[cfg(feature = "dwarfs")]
     println!("      --{arg_pfx}-dwarfs        [ARGS]       Launch dwarfs");
     #[cfg(feature = "dwarfs")]
     println!("      --{arg_pfx}-dwarfsck      [ARGS]       Launch dwarfsck");
@@ -621,8 +596,6 @@ fn main() {
         #[cfg(feature = "squashfs")]
         "mksquashfs"       => { embed.mksquashfs(exec_args); return }
         #[cfg(feature = "dwarfs")]
-        "tar" => { embed.tar(exec_args); return }
-        #[cfg(feature = "dwarfs")]
         "dwarfs"           => { embed.dwarfs(exec_args); return }
         #[cfg(feature = "dwarfs")]
         "dwarfsck"         => { embed.dwarfsck(exec_args); return }
@@ -658,10 +631,6 @@ fn main() {
                 is_extract_run = true
             }
         }
-    }
-
-    if is_extract_run {
-        is_noclenup = get_env_var("NO_CLEANUP") == "1"
     }
 
     let portable_home = &self_exe_dir.join(format!("{self_exe_name}.home"));
@@ -730,11 +699,6 @@ fn main() {
                 return
             }
             #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{arg_pfx}-tar") => {
-                embed.tar(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "dwarfs")]
             arg if arg == format!("--{arg_pfx}-dwarfs") => {
                 embed.dwarfs(exec_args[1..].to_vec());
                 return
@@ -768,27 +732,30 @@ fn main() {
         exit(1)
     });
 
+    if is_extract_run {
+        is_noclenup = get_env_var("NO_CLEANUP") == "1"
+    }
+
     cfg_if! {
         if #[cfg(feature = "appimage")] {
-            let mnt_name: String = if is_extract_run {
+            let tmp_dir_name: String = if is_extract_run {
                 format!("appimage_extracted_{}", hash_string(&self_exe.to_string_lossy()))
             } else {
                 format!(".mount_{}", random_string(8))
             };
-            let mount_dir = tmp_dir.join(mnt_name);
-            let mount_dirs = vec![&mount_dir];
+            tmp_dir = tmp_dir.join(tmp_dir_name);
+            let tmp_dirs = vec![&tmp_dir];
         } else {
             let uid = unsafe { nix::libc::getuid() };
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
-            let mnt_name: String;
-            if is_extract_run {
-                mnt_name = hash_string(&self_exe.to_string_lossy())
+            let tmp_dir_name: String = if is_extract_run {
+                hash_string(&self_exe.to_string_lossy())
             } else {
-                mnt_name = random_string(8)
-            }
-            let mount_dir = mnt_dir.join(mnt_name);
-            let mount_dirs = vec![&mount_dir, &mnt_dir, &ruid_dir];
+                random_string(8)
+            };
+            tmp_dir = mnt_dir.join(tmp_dir_name);
+            let tmp_dirs = vec![&tmp_dir, &mnt_dir, &ruid_dir];
         }
     }
 
@@ -800,7 +767,7 @@ fn main() {
                 return
             }
             arg if arg == format!("--{arg_pfx}-mount") => {
-                println!("{}", mount_dir.display());
+                println!("{}", tmp_dir.display());
                 is_mount_only = true
             }
             _ => {}
@@ -812,10 +779,11 @@ fn main() {
             if is_extract_run {
                 if let Err(err) = waitpid(child_pid, None) {
                     eprintln!("Failed to extract image: {err}");
+                    remove_tmp_dirs(tmp_dirs);
                     exit(1)
                 }
-            } else if !wait_mount(&mount_dir, Duration::from_millis(1000)) {
-                remove_mnt(mount_dirs);
+            } else if !wait_mount(&tmp_dir, Duration::from_millis(1000)) {
+                remove_tmp_dirs(tmp_dirs);
                 exit(1)
             }
 
@@ -823,36 +791,37 @@ fn main() {
             if !is_mount_only {
                 cfg_if! {
                     if #[cfg(feature = "appimage")] {
-                        let run = mount_dir.join("AppRun");
+                        let run = tmp_dir.join("AppRun");
                         if !run.is_file() {
                             eprintln!("AppRun not found: {:?}", run);
-                            remove_mnt(mount_dirs);
+                            remove_tmp_dirs(tmp_dirs);
                             exit(1)
-                        };
+                        }
                         env::set_var("ARGV0", arg0);
-                        env::set_var("APPDIR", &mount_dir);
+                        env::set_var("APPDIR", &tmp_dir);
                         env::set_var("APPIMAGE", self_exe);
                         env::set_var("APPOFFSET", format!("{runtime_size}"));
                     } else {
-                        let run = mount_dir.join("static").join("bash");
+                        let run = tmp_dir.join("static").join("bash");
                         if !run.is_file() {
                             eprintln!("Static bash not found: {:?}", run);
-                            remove_mnt(mount_dirs);
+                            remove_tmp_dirs(tmp_dirs);
                             exit(1)
-                        };
-                        exec_args.insert(0, format!("{}/Run.sh", mount_dir.display()));
+                        }
+                        exec_args.insert(0, format!("{}/Run.sh", tmp_dir.display()));
                         env::set_var("ARG0", arg0);
-                        env::set_var("RUNDIR", &mount_dir);
+                        env::set_var("RUNDIR", &tmp_dir);
                         env::set_var("RUNIMAGE", self_exe);
                         env::set_var("RUNOFFSET", format!("{runtime_size}"));
                     }
                 }
                 env::set_var("OWD", getcwd().unwrap());
 
-                try_set_portable("home",portable_home);
-                try_set_portable("config",portable_config);
+                try_set_portable("home", portable_home);
+                try_set_portable("config", portable_config);
 
-                let mut cmd = Command::new(run).args(&exec_args).spawn().unwrap();
+                let mut cmd = Command::new(run.canonicalize().unwrap())
+                    .args(&exec_args).spawn().unwrap();
                 let pid = Pid::from_raw(cmd.id() as i32);
 
                 spawn(move || { signals_handler(pid) });
@@ -872,21 +841,25 @@ fn main() {
 
             if is_extract_run {
                 if !is_noclenup {
-                    let _ = remove_dir_all(&mount_dir);
+                    let _ = remove_dir_all(&tmp_dir);
                 }
             } else {
                 let _ = waitpid(child_pid, None);
             }
 
-            remove_mnt(mount_dirs);
-
+            remove_tmp_dirs(tmp_dirs);
             exit(exit_code)
         }
         Ok(ForkResult::Child) => {
+            if let Err(err) = create_tmp_dirs(tmp_dirs) {
+                eprintln!("Failed to create tmp dir: {err}");
+                exit(1)
+            }
+
             if is_extract_run {
-                extract_image(&embed, &image, mount_dir, is_extract_run, None)
+                extract_image(&embed, &image, tmp_dir, is_extract_run, None)
             } else {
-                mount_image(&embed, &image, &mount_dir)
+                mount_image(&embed, &image, tmp_dir)
             }
         }
         Err(err) => {
