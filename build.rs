@@ -20,8 +20,8 @@ fn main() {
 
     let assets = IndexMap::from([
         ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.5.2.r6.g4289904/squashfuse-{arch}-upx")),
-        ("unsquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.r569.gc732a99/unsquashfs-{arch}-upx")),
-        ("mksquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.r569.gc732a99/mksquashfs-{arch}-upx")),
+        ("unsquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/unsquashfs-{arch}-upx")),
+        ("mksquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/mksquashfs-{arch}-upx")),
         ("dwarfs-universal-upx", format!("https://github.com/VHSgunzo/dwarfs-universal-artifacts/releases/download/v0.10.1-153-gab3e199f79/dwarfs-universal-Linux-{arch}-clang-O2")),
     ]);
 
