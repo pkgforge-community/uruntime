@@ -216,7 +216,7 @@ fn build(bin: &str) -> Result<(), DynError> {
         magic = "AI";
         build_args.append(&mut vec!["--features", "appimage"])
     }
-    if !bin.contains("lite") {
+    if !bin.contains("lite") && !bin.contains("dwarfs") {
         build_args.append(&mut vec!["--features", "mksquashfs"]);
     }
 
