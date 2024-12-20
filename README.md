@@ -15,23 +15,27 @@ rustup component add rust-src --toolchain nightly
 
 cargo xtask
 # Tasks:
-#     x86_64                     build x86_64 RunImage and AppImage uruntime
-#     runimage-x86_64            build x86_64 RunImage uruntime
-#     runimage-squashfs-x86_64   build x86_64 RunImage uruntime (SquashFS only)
-#     runimage-dwarfs-x86_64     build x86_64 RunImage uruntime (DwarFS only)
-#     appimage-x86_64            build x86_64 AppImage uruntime
-#     appimage-squashfs-x86_64   build x86_64 AppImage uruntime (SquashFS only)
-#     appimage-dwarfs-x86_64     build x86_64 AppImage uruntime (DwarFS only)
-#
-#     aarch64                     build aarch64 RunImage and AppImage uruntime
-#     runimage-aarch64            build aarch64 RunImage uruntime
-#     runimage-squashfs-aarch64   build aarch64 RunImage uruntime (SquashFS only)
-#     runimage-dwarfs-aarch64     build aarch64 RunImage uruntime (DwarFS only)
-#     appimage-aarch64            build aarch64 AppImage uruntime
-#     appimage-squashfs-aarch64   build aarch64 AppImage uruntime (SquashFS only)
-#     appimage-dwarfs-aarch64     build aarch64 AppImage uruntime (DwarFS only)
+#     x86_64                           build x86_64 RunImage and AppImage uruntime
+#     runimage-x86_64                  build x86_64 RunImage uruntime
+#     runimage-squashfs-x86_64         build x86_64 RunImage uruntime (SquashFS-only)
+#     runimage-dwarfs-x86_64           build x86_64 RunImage uruntime (DwarFS-only)
+#     appimage-x86_64                  build x86_64 AppImage uruntime
+#     appimage-lite-x86_64             build x86_64 AppImage uruntime (no mksquashfs)
+#     appimage-squashfs-x86_64         build x86_64 AppImage uruntime (SquashFS-only)
+#     appimage-squashfs-lite-x86_64    build x86_64 AppImage uruntime (SquashFS-only no mksquashfs)
+#     appimage-dwarfs-x86_64           build x86_64 AppImage uruntime (DwarFS-only)
 # 
-#     all                         build all of the above
+#     aarch64                          build aarch64 RunImage and AppImage uruntime
+#     runimage-aarch64                 build aarch64 RunImage uruntime
+#     runimage-squashfs-aarch64        build aarch64 RunImage uruntime (SquashFS-only)
+#     runimage-dwarfs-aarch64          build aarch64 RunImage uruntime (DwarFS-only)
+#     appimage-aarch64                 build aarch64 AppImage uruntime
+#     appimage-lite-aarch64            build aarch64 AppImage uruntime (no mksquashfs)
+#     appimage-squashfs-aarch64        build aarch64 AppImage uruntime (SquashFS-only)
+#     appimage-squashfs-lite-aarch64   build aarch64 AppImage uruntime (SquashFS-only no mksquashfs)
+#     appimage-dwarfs-aarch64          build aarch64 AppImage uruntime (DwarFS-only)
+# 
+#     all                              build all of the above
 
 # for RunImage x86_64
 cargo xtask runimage-x86_64
