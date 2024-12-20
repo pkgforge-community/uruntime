@@ -26,14 +26,18 @@ fn try_main() -> Result<(), DynError> {
         "runimage-squashfs-x86_64",
         "runimage-dwarfs-x86_64",
         "appimage-x86_64",
+        "appimage-lite-x86_64",
         "appimage-squashfs-x86_64",
+        "appimage-squashfs-lite-x86_64",
         "appimage-dwarfs-x86_64",
 
         "runimage-aarch64",
         "runimage-squashfs-aarch64",
         "runimage-dwarfs-aarch64",
         "appimage-aarch64",
+        "appimage-lite-aarch64",
         "appimage-squashfs-aarch64",
+        "appimage-squashfs-lite-aarch64",
         "appimage-dwarfs-aarch64",
     ];
     let arg = env::args().nth(1).unwrap_or_else(||{
@@ -74,23 +78,27 @@ fn create_dist_dir() -> Result<(), DynError> {
 
 fn print_help() {
     eprintln!("Tasks:
-    x86_64                     build x86_64 RunImage and AppImage uruntime
-    runimage-x86_64            build x86_64 RunImage uruntime
-    runimage-squashfs-x86_64   build x86_64 RunImage uruntime (SquashFS only)
-    runimage-dwarfs-x86_64     build x86_64 RunImage uruntime (DwarFS only)
-    appimage-x86_64            build x86_64 AppImage uruntime
-    appimage-squashfs-x86_64   build x86_64 AppImage uruntime (SquashFS only)
-    appimage-dwarfs-x86_64     build x86_64 AppImage uruntime (DwarFS only)
+    x86_64                           build x86_64 RunImage and AppImage uruntime
+    runimage-x86_64                  build x86_64 RunImage uruntime
+    runimage-squashfs-x86_64         build x86_64 RunImage uruntime (SquashFS-only)
+    runimage-dwarfs-x86_64           build x86_64 RunImage uruntime (DwarFS-only)
+    appimage-x86_64                  build x86_64 AppImage uruntime
+    appimage-lite-x86_64             build x86_64 AppImage uruntime (no mksquashfs)
+    appimage-squashfs-x86_64         build x86_64 AppImage uruntime (SquashFS-only)
+    appimage-squashfs-lite-x86_64    build x86_64 AppImage uruntime (SquashFS-only no mksquashfs)
+    appimage-dwarfs-x86_64           build x86_64 AppImage uruntime (DwarFS-only)
 
-    aarch64                     build aarch64 RunImage and AppImage uruntime
-    runimage-aarch64            build aarch64 RunImage uruntime
-    runimage-squashfs-aarch64   build aarch64 RunImage uruntime (SquashFS only)
-    runimage-dwarfs-aarch64     build aarch64 RunImage uruntime (DwarFS only)
-    appimage-aarch64            build aarch64 AppImage uruntime
-    appimage-squashfs-aarch64   build aarch64 AppImage uruntime (SquashFS only)
-    appimage-dwarfs-aarch64     build aarch64 AppImage uruntime (DwarFS only)
+    aarch64                          build aarch64 RunImage and AppImage uruntime
+    runimage-aarch64                 build aarch64 RunImage uruntime
+    runimage-squashfs-aarch64        build aarch64 RunImage uruntime (SquashFS-only)
+    runimage-dwarfs-aarch64          build aarch64 RunImage uruntime (DwarFS-only)
+    appimage-aarch64                 build aarch64 AppImage uruntime
+    appimage-lite-aarch64            build aarch64 AppImage uruntime (no mksquashfs)
+    appimage-squashfs-aarch64        build aarch64 AppImage uruntime (SquashFS-only)
+    appimage-squashfs-lite-aarch64   build aarch64 AppImage uruntime (SquashFS-only no mksquashfs)
+    appimage-dwarfs-aarch64          build aarch64 AppImage uruntime (DwarFS-only)
 
-    all                         build all of the above")
+    all                              build all of the above")
 }
 
 fn strip(path: &PathBuf) -> Result<(), DynError> {
@@ -198,15 +206,18 @@ fn build(bin: &str) -> Result<(), DynError> {
         ])
     }
 
+    if bin.contains("squashfs") {
+        build_args.append(&mut vec!["--no-default-features", "--features", "squashfs"]);
+    } else if bin.contains("dwarfs") {
+        build_args.append(&mut vec!["--no-default-features", "--features", "dwarfs"]);
+    }
     let mut magic = "RI";
     if bin.contains("appimage") {
         magic = "AI";
         build_args.append(&mut vec!["--features", "appimage"])
     }
-    if bin.contains("squashfs") {
-        build_args.append(&mut vec!["--no-default-features", "--features", "squashfs"]);
-    } else if bin.contains("dwarfs") {
-        build_args.append(&mut vec!["--no-default-features", "--features", "dwarfs"]);
+    if !bin.contains("lite") {
+        build_args.append(&mut vec!["--features", "mksquashfs"]);
     }
 
     let status = Command::new(cargo)

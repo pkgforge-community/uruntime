@@ -19,9 +19,13 @@ fn main() {
     let assets_path_link = project_path.join("assets");
 
     let assets = IndexMap::from([
+        #[cfg(feature = "squashfs")]
         ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.5.2.r6.g4289904/squashfuse-{arch}-upx")),
+        #[cfg(feature = "squashfs")]
         ("unsquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/unsquashfs-{arch}-upx")),
+        #[cfg(feature = "mksquashfs")]
         ("mksquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/mksquashfs-{arch}-upx")),
+        #[cfg(feature = "dwarfs")]
         ("dwarfs-universal-upx", format!("https://github.com/VHSgunzo/dwarfs-universal-artifacts/releases/download/v0.10.2-126-gcaa0d97555/dwarfs-universal-Linux-{arch}-clang-O2")),
     ]);
 

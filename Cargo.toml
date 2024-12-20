@@ -1,6 +1,6 @@
 [package]
 name = "uruntime"
-version = "0.0.8"
+version = "0.0.9"
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/VHSgunzo/uruntime"
@@ -24,6 +24,7 @@ default = [
 ]
 dwarfs = []
 squashfs = []
+mksquashfs = []
 appimage = []
 
 [build-dependencies]

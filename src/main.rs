@@ -42,7 +42,7 @@ struct Embed {
     squashfuse: Vec<u8>,
     #[cfg(feature = "squashfs")]
     unsquashfs: Vec<u8>,
-    #[cfg(feature = "squashfs")]
+    #[cfg(feature = "mksquashfs")]
     mksquashfs: Vec<u8>,
     #[cfg(feature = "dwarfs")]
     dwarfs_universal: Vec<u8>,
@@ -55,7 +55,7 @@ impl Embed {
             squashfuse: include_bytes!("../assets/squashfuse-upx").to_vec(),
             #[cfg(feature = "squashfs")]
             unsquashfs: include_bytes!("../assets/unsquashfs-upx").to_vec(),
-            #[cfg(feature = "squashfs")]
+            #[cfg(feature = "mksquashfs")]
             mksquashfs: include_bytes!("../assets/mksquashfs-upx").to_vec(),
             #[cfg(feature = "dwarfs")]
             dwarfs_universal: include_bytes!("../assets/dwarfs-universal-upx").to_vec(),
@@ -79,7 +79,7 @@ impl Embed {
         self.embed_exec("unsquashfs", &self.unsquashfs, exec_args);
     }
 
-    #[cfg(feature = "squashfs")]
+    #[cfg(feature = "mksquashfs")]
     fn mksquashfs(&self, exec_args: Vec<String>) {
         self.embed_exec("mksquashfs", &self.mksquashfs, exec_args);
     }
@@ -518,7 +518,7 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     println!("      --{arg_pfx}-squashfuse    [ARGS]       Launch squashfuse");
     #[cfg(feature = "squashfs")]
     println!("      --{arg_pfx}-unsquashfs    [ARGS]       Launch unsquashfs");
-    #[cfg(feature = "squashfs")]
+    #[cfg(feature = "mksquashfs")]
     println!("      --{arg_pfx}-mksquashfs    [ARGS]       Launch mksquashfs");
     #[cfg(feature = "dwarfs")]
     println!("      --{arg_pfx}-dwarfs        [ARGS]       Launch dwarfs");
@@ -593,7 +593,7 @@ fn main() {
         "squashfuse"       => { embed.squashfuse(exec_args); return }
         #[cfg(feature = "squashfs")]
         "unsquashfs"       => { embed.unsquashfs(exec_args); return }
-        #[cfg(feature = "squashfs")]
+        #[cfg(feature = "mksquashfs")]
         "mksquashfs"       => { embed.mksquashfs(exec_args); return }
         #[cfg(feature = "dwarfs")]
         "dwarfs"           => { embed.dwarfs(exec_args); return }
@@ -693,7 +693,7 @@ fn main() {
                 embed.unsquashfs(exec_args[1..].to_vec());
                 return
             }
-            #[cfg(feature = "squashfs")]
+            #[cfg(feature = "mksquashfs")]
             arg if arg == format!("--{arg_pfx}-mksquashfs") => {
                 embed.mksquashfs(exec_args[1..].to_vec());
                 return
