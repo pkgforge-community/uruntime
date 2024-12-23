@@ -20,6 +20,8 @@ use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals}
 
 
 const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(feature = "dwarfs")]
+const DWARFS_CACHESIZE: &str = "128M";
 
 
 #[derive(Debug)]
@@ -327,6 +329,17 @@ fn create_tmp_dirs(dirs: Vec<&PathBuf>) -> Result<()> {
     Err(Error::last_os_error())
 }
 
+#[cfg(feature = "dwarfs")]
+fn get_dwfs_cachesize() -> String {
+    let cachesize_env = get_env_var("DWARFS_CACHESIZE");
+    if cachesize_env.is_empty() {
+        DWARFS_CACHESIZE.into()
+    } else {
+        let opts: Vec<&str> = cachesize_env.split(',').collect();
+        opts.first().unwrap_or(&DWARFS_CACHESIZE).to_string()
+    }
+}
+
 fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     check_fuse();
 
@@ -340,6 +353,8 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
             let num_threads = num_cpus::get();
             embed.dwarfs(vec!["-f".into(),
                 "-o".into(), "ro,nodev,noatime,clone_fd".into(),
+                "-o".into(), "cache_files,no_cache_image".into(),
+                "-o".into(), format!("cachesize={}", get_dwfs_cachesize()),
                 "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset),
                 "-o".into(), format!("workers={num_threads}"),
@@ -404,6 +419,7 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
             let mut exec_args = vec![
                 "--input".into(), image_path,
                 "--log-level=error".into(),
+                format!("--cache-size={}", get_dwfs_cachesize()),
                 format!("--image-offset={}", image.offset),
                 format!("--num-workers={}", num_cpus::get()),
                 "--output".into(), extract_dir,
@@ -559,6 +575,8 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount", arg_pfx.to_uppercase());
       #[cfg(feature = "appimage")]
       println!("      TARGET_APPIMAGE=/path          Operate on a target {self_name} rather than this file itself");
+      #[cfg(feature = "dwarfs")]
+      println!("      DWARFS_CACHESIZE=128M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)");
 }
 
 fn main() {
