@@ -21,7 +21,9 @@ use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals}
 
 const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "dwarfs")]
-const DWARFS_CACHESIZE: &str = "128M";
+const DWARFS_CACHESIZE: &str = "512M";
+#[cfg(feature = "dwarfs")]
+const DWARFS_BLOCKSIZE: &str = "512K";
 
 
 #[derive(Debug)]
@@ -340,6 +342,29 @@ fn get_dwfs_cachesize() -> String {
     }
 }
 
+#[cfg(feature = "dwarfs")]
+fn get_dwfs_blocksize() -> String {
+    let blocksize_env = get_env_var("DWARFS_BLOCKSIZE");
+    if blocksize_env.is_empty() {
+        DWARFS_BLOCKSIZE.into()
+    } else {
+        let opts: Vec<&str> = blocksize_env.split(',').collect();
+        opts.first().unwrap_or(&DWARFS_BLOCKSIZE).to_string()
+    }
+}
+
+#[cfg(feature = "dwarfs")]
+fn get_dwfs_workers() -> String {
+    let num_threads = num_cpus::get().to_string();
+    let workers_env = get_env_var("DWARFS_WORKERS");
+    if workers_env.is_empty() {
+        num_threads
+    } else {
+        let opts: Vec<&str> = workers_env.split(',').collect();
+        opts.first().unwrap_or(&num_threads.as_str()).to_string()
+    }
+}
+
 fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     check_fuse();
 
@@ -350,15 +375,15 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     if image.is_dwar {
         #[cfg(feature = "dwarfs")]
         {
-            let num_threads = num_cpus::get();
             embed.dwarfs(vec!["-f".into(),
                 "-o".into(), "ro,nodev,noatime,clone_fd".into(),
                 "-o".into(), "cache_files,no_cache_image".into(),
                 "-o".into(), format!("cachesize={}", get_dwfs_cachesize()),
+                "-o".into(), format!("blocksize={}", get_dwfs_blocksize()),
+                "-o".into(), "tidy_strategy=time,tidy_interval=500ms,tidy_max_age=1s".into(),
+                "-o".into(), format!("workers={}", get_dwfs_workers()),
                 "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset),
-                "-o".into(), format!("workers={num_threads}"),
-                "-o".into(), format!("max_threads={num_threads}"),
                 "-o".into(), "debuglevel=error".into(),
                 image_path, mount_dir
             ])
@@ -421,7 +446,7 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
                 "--log-level=error".into(),
                 format!("--cache-size={}", get_dwfs_cachesize()),
                 format!("--image-offset={}", image.offset),
-                format!("--num-workers={}", num_cpus::get()),
+                format!("--num-workers={}", get_dwfs_workers()),
                 "--output".into(), extract_dir,
                 "--stdout-progress".into()
             ];
@@ -576,7 +601,11 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       #[cfg(feature = "appimage")]
       println!("      TARGET_APPIMAGE=/path          Operate on a target {self_name} rather than this file itself");
       #[cfg(feature = "dwarfs")]
-      println!("      DWARFS_CACHESIZE=128M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)");
+      println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)");
+      #[cfg(feature = "dwarfs")]
+      println!("      DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)");
+      #[cfg(feature = "dwarfs")]
+      println!("      DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)");
 }
 
 fn main() {

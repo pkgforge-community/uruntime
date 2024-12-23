@@ -100,7 +100,9 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
                                        using extract and run option for reuse extracted data
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
-      DWARFS_CACHESIZE=128M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
+      DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
 ```
 
 * **AppImage runtime usage**
@@ -157,5 +159,7 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       TARGET_APPIMAGE=/path          Operate on a target AppImage rather than this file itself
-      DWARFS_CACHESIZE=128M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
+      DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
 ```
