@@ -1,6 +1,6 @@
 [package]
 name = "uruntime"
-version = "0.1.2"
+version = "0.1.3"
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/VHSgunzo/uruntime"
@@ -35,6 +35,6 @@ which = "7.0.0"
 cfg-if = "1.0.0"
 goblin = "0.9.0"
 num_cpus = "1.16.0"
-memfd-exec = "0.2.1"
 signal-hook = "0.3.17"
 nix = { version = "0.29.0", features = [ "fs", "signal" ] }
+memfd-exec = { git = "https://github.com/VHSgunzo/memfd-exec.git" }
