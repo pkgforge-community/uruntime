@@ -163,3 +163,26 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
       DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
 ```
+
+### **Built-in configuration:**
+You can change the startup logic by changing the built-in uruntime parameters.
+* `URUNTIME_EXTRACT` - Specifies the logic of extracting or mounting
+```
+# URUNTIME_EXTRACT=0 - FUSE mounting only (default for RunImage uruntime)
+sed -i 's|URUNTIME_EXTRACT=[0-9]|URUNTIME_EXTRACT=0|' /path/uruntime
+
+# URUNTIME_EXTRACT=1 - Do not use FUSE mounting, but extract and run
+sed -i 's|URUNTIME_EXTRACT=[0-9]|URUNTIME_EXTRACT=1|' /path/uruntime
+
+# URUNTIME_EXTRACT=2 - Try to use FUSE mounting and if it is unavailable extract and run (default for AppImage uruntime)
+sed -i 's|URUNTIME_EXTRACT=[0-9]|URUNTIME_EXTRACT=2|' /path/uruntime
+```
+
+* `URUNTIME_CLEANUP` - Specifies the logic of cleanup after extract and run
+```
+# URUNTIME_CLEANUP=0 - Disable extracting directory cleanup
+sed -i 's|URUNTIME_CLEANUP=[0-9]|URUNTIME_CLEANUP=0|' /path/uruntime
+
+# URUNTIME_CLEANUP=1 - Enable extracting directory cleanup (default)
+sed -i 's|URUNTIME_CLEANUP=[0-9]|URUNTIME_CLEANUP=1|' /path/uruntime
+```

@@ -14,7 +14,7 @@ use which::which;
 use cfg_if::cfg_if;
 use goblin::elf::Elf;
 use memfd_exec::{MemFdExecutable, Stdio};
-use nix::sys::{wait::waitpid, signal::{Signal, kill}};
+use nix::{libc, sys::{wait::waitpid, signal::{Signal, kill}}};
 use nix::unistd::{access, fork, getcwd, AccessFlags, ForkResult, Pid};
 use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals};
 
@@ -24,6 +24,14 @@ const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DWARFS_CACHESIZE: &str = "512M";
 #[cfg(feature = "dwarfs")]
 const DWARFS_BLOCKSIZE: &str = "512K";
+const URUNTIME_CLEANUP: &str = "URUNTIME_CLEANUP=1";
+cfg_if! {
+    if #[cfg(feature = "appimage")] {
+        const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=2";
+    } else {
+        const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=0";
+    }
+}
 
 
 #[derive(Debug)]
@@ -173,7 +181,7 @@ fn add_to_path(path: &PathBuf) {
     }
 }
 
-fn check_fuse() {
+fn check_fuse() -> bool {
     let mut is_fusermount = true;
     let tmp_path_dir = &PathBuf::from("/tmp/.path");
     if tmp_path_dir.is_dir() {
@@ -225,26 +233,9 @@ fn check_fuse() {
     }
     if access("/dev/fuse", AccessFlags::R_OK).is_err() ||
        access("/dev/fuse", AccessFlags::W_OK).is_err() || !is_fusermount {
-        eprintln!("{}: failed to utilize FUSE during startup", env::args().next().unwrap());
-        cfg_if! {
-            if #[cfg(feature = "appimage")] {
-                let arg_pfx = "appimage";
-                let self_name = "AppImage";
-            } else {
-                let arg_pfx = "runtime";
-                let self_name = "RunImage";
-            }
-        }
-        eprintln!(
-"Cannot mount {self_name}, please check your FUSE setup.
-
-You might still be able to extract the contents of this {self_name}
-if you run it with the --{arg_pfx}-extract option
-See https://github.com/AppImage/AppImageKit/wiki/FUSE
-for more information
-");
-        exit(1)
+        return false
     }
+    true
 }
 
 fn get_runtime(path: &PathBuf) -> Result<Runtime> {
@@ -366,10 +357,8 @@ fn get_dwfs_workers() -> String {
 }
 
 fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
-    check_fuse();
-
-    let uid = unsafe { nix::libc::getuid() };
-    let gid = unsafe { nix::libc::getgid() };
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
     let mount_dir = mount_dir.to_str().unwrap().to_string();
     let image_path = image.path.to_str().unwrap().to_string();
     if image.is_dwar {
@@ -659,9 +648,12 @@ fn main() {
         exec_args[0].to_string()
     } else {"".into()};
 
-    let mut is_noclenup = false;
     let mut is_mount_only = false;
     let mut is_extract_run = false;
+    let mut is_noclenup = match URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str() {
+        "=1" => { false }
+        _ => { true }
+    };
 
     let mut tmp_dir = PathBuf::from(get_env_var("TMPDIR"));
     if !tmp_dir.exists() { tmp_dir = env::temp_dir() }
@@ -669,11 +661,13 @@ fn main() {
     cfg_if! {
         if #[cfg(feature = "appimage")] {
             let arg_pfx = "appimage";
+            let self_name = "AppImage";
             if get_env_var("APPIMAGE_EXTRACT_AND_RUN") == "1" {
                 is_extract_run = true
             }
         } else {
             let arg_pfx = "runtime";
+            let self_name = "RunImage";
             if get_env_var("RUNTIME_EXTRACT_AND_RUN") == "1" {
                 is_extract_run = true
             }
@@ -779,8 +773,30 @@ fn main() {
         exit(1)
     });
 
-    if is_extract_run {
-        is_noclenup = get_env_var("NO_CLEANUP") == "1"
+    let uruntime_extract = match URUNTIME_EXTRACT.replace("URUNTIME_EXTRACT=", "=").as_str() {
+        "=1" => { is_extract_run = true; 1 }
+        "=2" => { 2 }
+        _ => { 0 }
+    };
+
+    if (!is_extract_run || is_mount_only) && !check_fuse() {
+        eprintln!("{arg0}: failed to utilize FUSE during startup!");
+        if uruntime_extract == 2 && !is_mount_only {
+            is_extract_run = true
+        } else {
+            eprintln!(
+"Cannot mount {self_name}, please check your FUSE setup.
+
+You might still be able to extract the contents of this {self_name}
+if you run it with the --{arg_pfx}-extract option
+See https://github.com/AppImage/AppImageKit/wiki/FUSE
+and run it with the --{arg_pfx}-help option for more information");
+            exit(1)
+        }
+    }
+
+    if is_extract_run && get_env_var("NO_CLEANUP") == "1" {
+        is_noclenup = true
     }
 
     cfg_if! {
@@ -793,7 +809,7 @@ fn main() {
             tmp_dir = tmp_dir.join(tmp_dir_name);
             let tmp_dirs = vec![&tmp_dir];
         } else {
-            let uid = unsafe { nix::libc::getuid() };
+            let uid = unsafe { libc::getuid() };
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
             let tmp_dir_name: String = if is_extract_run {
@@ -810,7 +826,7 @@ fn main() {
         match arg1 {
             arg if arg == format!("--{arg_pfx}-extract") => {
                 extract_image(&embed, &image, PathBuf::from("."),
-                    is_extract_run, exec_args.get(1));
+                    false, exec_args.get(1));
                 return
             }
             arg if arg == format!("--{arg_pfx}-mount") => {
@@ -902,6 +918,8 @@ fn main() {
                 eprintln!("Failed to create tmp dir: {err}");
                 exit(1)
             }
+
+            unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) };
 
             if is_extract_run {
                 extract_image(&embed, &image, tmp_dir, is_extract_run, None)
