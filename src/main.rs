@@ -20,19 +20,14 @@ use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals}
 
 
 const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
+const URUNTIME_MOUNT: &str = "URUNTIME_MOUNT=1";
+const URUNTIME_CLEANUP: &str = "URUNTIME_CLEANUP=1";
+const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=3";
+const MAX_EXTRACT_SELF_SIZE: u64 = 350 * 1024 * 1024; // 350 MB
 #[cfg(feature = "dwarfs")]
 const DWARFS_CACHESIZE: &str = "512M";
 #[cfg(feature = "dwarfs")]
 const DWARFS_BLOCKSIZE: &str = "512K";
-const URUNTIME_CLEANUP: &str = "URUNTIME_CLEANUP=1";
-cfg_if! {
-    if #[cfg(feature = "appimage")] {
-        const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=2";
-    } else {
-        const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=0";
-    }
-}
-
 
 #[derive(Debug)]
 struct Runtime {
@@ -293,6 +288,10 @@ fn is_mount_point(path: &PathBuf) -> Result<bool> {
     }
 }
 
+fn get_file_size(path: &PathBuf) -> Result<u64> {
+    Ok(fs::metadata(path)?.len())
+}
+
 fn wait_mount(path: &PathBuf, timeout: Duration) -> bool {
     let start_time = Instant::now();
     while !path.exists() || !is_mount_point(path).unwrap_or(false) {
@@ -315,7 +314,11 @@ fn create_tmp_dirs(dirs: Vec<&PathBuf>) -> Result<()> {
     if let Some(dir) = dirs.first() {
         create_dir_all(dir)?;
         for dir in dirs {
-            set_permissions(dir, Permissions::from_mode(0o700))?
+            if let Err(err) = set_permissions(dir, Permissions::from_mode(0o700)) {
+                if let Some(os_error) = err.raw_os_error() {
+                    if os_error != 30 { return Err(err) }
+                }
+            }
         }
         return Ok(());
     }
@@ -357,6 +360,9 @@ fn get_dwfs_workers() -> String {
 }
 
 fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
+    if is_mount_point(&mount_dir).unwrap_or(false) {
+        return
+    }
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
     let mount_dir = mount_dir.to_str().unwrap().to_string();
@@ -585,6 +591,8 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       {}_EXTRACT_AND_RUN=1      Run the {self_name} afer extraction without using FUSE
       NO_CLEANUP=1                   Do not clear the unpacking directory after closing when
                                        using extract and run option for reuse extracted data
+      NO_UNMOUNT=1                   Do not unmount the mount directory after closing 
+                                      for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount", arg_pfx.to_uppercase());
       #[cfg(feature = "appimage")]
@@ -650,10 +658,8 @@ fn main() {
 
     let mut is_mount_only = false;
     let mut is_extract_run = false;
-    let mut is_noclenup = match URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str() {
-        "=1" => { false }
-        _ => { true }
-    };
+    let mut is_noclenup = !matches!(URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str(), "=1");
+    let mut is_nounmount = !matches!(URUNTIME_MOUNT.replace("URUNTIME_MOUNT=", "=").as_str(), "=1");
 
     let mut tmp_dir = PathBuf::from(get_env_var("TMPDIR"));
     if !tmp_dir.exists() { tmp_dir = env::temp_dir() }
@@ -707,7 +713,7 @@ fn main() {
             }
             arg if arg == format!("--{arg_pfx}-updateinfo") ||
                            arg == format!("--{arg_pfx}-updateinformation") => {
-                let updateinfo = get_section_data(runtime.headers_bytes,".upd_info")
+                let updateinfo = get_section_data(runtime.headers_bytes, ".upd_info")
                     .unwrap_or_else(|err|{
                         eprintln!("Failed to get update info: {err}");
                         exit(1)
@@ -716,7 +722,7 @@ fn main() {
                 return
             }
             arg if arg == format!("--{arg_pfx}-signature") => {
-                let signature = get_section_data(runtime.headers_bytes,".sha256_sig")
+                let signature = get_section_data(runtime.headers_bytes, ".sha256_sig")
                     .unwrap_or_else(|err|{
                         eprintln!("Failed to get signature info: {err}");
                         exit(1)
@@ -776,12 +782,18 @@ fn main() {
     let uruntime_extract = match URUNTIME_EXTRACT.replace("URUNTIME_EXTRACT=", "=").as_str() {
         "=1" => { is_extract_run = true; 1 }
         "=2" => { 2 }
+        "=3" => { 3 }
         _ => { 0 }
     };
 
     if (!is_extract_run || is_mount_only) && !check_fuse() {
         eprintln!("{arg0}: failed to utilize FUSE during startup!");
-        if uruntime_extract == 2 && !is_mount_only {
+        let self_size = get_file_size(self_exe).unwrap_or_else(|err| {
+            eprintln!("Failed to get self size: {err}");
+            exit(1)
+        });
+        if !is_mount_only && (uruntime_extract == 2 || 
+           (uruntime_extract == 3 && self_size <= MAX_EXTRACT_SELF_SIZE)) {
             is_extract_run = true
         } else {
             eprintln!(
@@ -799,10 +811,16 @@ and run it with the --{arg_pfx}-help option for more information");
         is_noclenup = true
     }
 
+    if !is_extract_run && get_env_var("NO_UNMOUNT") == "1" {
+        is_nounmount = true
+    }
+
     cfg_if! {
         if #[cfg(feature = "appimage")] {
             let tmp_dir_name: String = if is_extract_run {
                 format!("appimage_extracted_{}", hash_string(&self_exe.to_string_lossy()))
+            } else if is_nounmount {
+                format!(".mount_{}", hash_string(&self_exe.to_string_lossy()))
             } else {
                 format!(".mount_{}", random_string(8))
             };
@@ -812,7 +830,7 @@ and run it with the --{arg_pfx}-help option for more information");
             let uid = unsafe { libc::getuid() };
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
-            let tmp_dir_name: String = if is_extract_run {
+            let tmp_dir_name: String = if is_extract_run || is_nounmount {
                 hash_string(&self_exe.to_string_lossy())
             } else {
                 random_string(8)
@@ -895,7 +913,7 @@ and run it with the --{arg_pfx}-help option for more information");
                     }
                 }
 
-                if !is_extract_run {
+                if !is_extract_run && !is_nounmount {
                     let _ = kill(child_pid, Signal::SIGTERM);
                 }
             } else {
@@ -906,7 +924,7 @@ and run it with the --{arg_pfx}-help option for more information");
                 if !is_noclenup {
                     let _ = remove_dir_all(&tmp_dir);
                 }
-            } else {
+            } else if !is_nounmount {
                 let _ = waitpid(child_pid, None);
             }
 
