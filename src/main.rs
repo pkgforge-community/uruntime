@@ -13,11 +13,11 @@ use std::{
 use which::which;
 use cfg_if::cfg_if;
 use goblin::elf::Elf;
+use xxhash_rust::xxh3::{Xxh3, xxh3_64};
 use memfd_exec::{MemFdExecutable, Stdio};
 use nix::{libc, sys::{wait::waitpid, signal::{Signal, kill}}};
 use nix::unistd::{access, fork, getcwd, AccessFlags, ForkResult, Pid};
 use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals};
-
 
 const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const URUNTIME_MOUNT: &str = "URUNTIME_MOUNT=1";
@@ -522,6 +522,30 @@ fn hash_string(data: &str) -> String {
     hasher.finish().to_string()
 }
 
+fn fast_hash_file(path: &PathBuf, offset: u64) -> Result<u32> {
+    let mut file = File::open(path)?;
+    let file_size = get_file_size(path)? - offset;
+
+    let mut buffer = [0u8; 16];
+    let mut hasher = Xxh3::new();
+
+    file.seek(SeekFrom::Start(offset))?;
+    file.read_exact(&mut buffer)?;
+    hasher.update(&buffer);
+
+    let middle = file_size / 2;
+    file.seek(SeekFrom::Start(middle))?;
+    file.read_exact(&mut buffer)?;
+    hasher.update(&buffer);
+
+    let end = file_size.saturating_sub(16);
+    file.seek(SeekFrom::Start(end))?;
+    file.read_exact(&mut buffer)?;
+    hasher.update(&buffer);
+
+    Ok(hasher.digest() as u32)
+}
+
 fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     cfg_if! {
         if #[cfg(feature = "appimage")] {
@@ -772,7 +796,6 @@ fn main() {
             _ => {}
         }
     }
-    drop(runtime);
 
     let image = get_image(self_exe, runtime_size).unwrap_or_else(|err|{
         eprintln!("Failed to get image: {err}");
@@ -815,12 +838,26 @@ and run it with the --{arg_pfx}-help option for more information");
         is_nounmount = true
     }
 
+    let mut self_hash: String = "".into();
+    if is_extract_run || is_nounmount {
+        let uid = unsafe { libc::getuid() };
+        self_hash = hash_string(&(
+            xxh3_64(&runtime.headers_bytes) as u32 +
+            fast_hash_file(&image.path, image.offset).unwrap_or_else(|err|{
+                eprintln!("Failed to get image hash: {err}");
+                exit(1)}) + 
+            uid
+        ).to_string())
+    }
+
+    drop(runtime);
+
     cfg_if! {
         if #[cfg(feature = "appimage")] {
             let tmp_dir_name: String = if is_extract_run {
-                format!("appimage_extracted_{}", hash_string(&self_exe.to_string_lossy()))
+                format!("appimage_extracted_{}", self_hash)
             } else if is_nounmount {
-                format!(".mount_{}", hash_string(&self_exe.to_string_lossy()))
+                format!(".mount_{}", self_hash)
             } else {
                 format!(".mount_{}", random_string(8))
             };
@@ -831,7 +868,7 @@ and run it with the --{arg_pfx}-help option for more information");
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
             let tmp_dir_name: String = if is_extract_run || is_nounmount {
-                hash_string(&self_exe.to_string_lossy())
+                self_hash
             } else {
                 random_string(8)
             };
