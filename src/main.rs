@@ -538,6 +538,7 @@ fn fast_hash_file(path: &PathBuf, offset: u64) -> Result<u32> {
     let mut file = File::open(path)?;
     let file_size = get_file_size(path)?.saturating_sub(offset);
     let mut buffer = [0u8; 48];
+    file.seek(SeekFrom::Start(offset))?;
     file.read_exact(&mut buffer[0..16])?;
     file.seek(SeekFrom::Start(file_size / 2))?;
     file.read_exact(&mut buffer[16..32])?;
