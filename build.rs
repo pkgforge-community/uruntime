@@ -20,7 +20,7 @@ fn main() {
 
     let assets = IndexMap::from([
         #[cfg(feature = "squashfs")]
-        ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.5.2.r6.g4289904/squashfuse-glibc-{arch}-upx")),
+        ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.5.2.r10.g775b4cc/squashfuse-musl-mimalloc-{arch}-upx")),
         #[cfg(feature = "squashfs")]
         ("unsquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/unsquashfs-{arch}-upx")),
         #[cfg(feature = "mksquashfs")]
@@ -58,7 +58,7 @@ fn main() {
 
         if !asset.ends_with("upx") && !asset_upx_path.exists() {
             let output = Command::new("upx").args([
-                "--force-overwrite", "-9", "--best",
+                "--force-overwrite",
                 asset_path.to_str().unwrap(), "-o",
                 asset_upx_path.to_str().unwrap()
             ]).output().unwrap_or_else(|err| panic!("Failed to execute upx: {err}: {asset}"));

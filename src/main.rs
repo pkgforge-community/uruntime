@@ -13,7 +13,7 @@ use std::{
 use which::which;
 use cfg_if::cfg_if;
 use goblin::elf::Elf;
-use xxhash_rust::xxh3::{Xxh3, xxh3_64};
+use xxhash_rust::xxh3::xxh3_64;
 use memfd_exec::{MemFdExecutable, Stdio};
 use nix::{libc, sys::{wait::waitpid, signal::{Signal, kill}}};
 use nix::unistd::{access, fork, getcwd, AccessFlags, ForkResult, Pid};
@@ -261,11 +261,11 @@ fn get_runtime(path: &PathBuf) -> Result<Runtime> {
 
 fn random_string(length: usize) -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs();
+    let mut rng = time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_millis();
     let mut result = String::with_capacity(length);
     for _ in 0..length {
         rng = rng.wrapping_mul(48271).wrapping_rem(0x7FFFFFFF);
-        let idx = (rng % CHARSET.len() as u64) as usize;
+        let idx = (rng as u64 % CHARSET.len() as u64) as usize;
         result.push(CHARSET[idx] as char);
     }
     result
@@ -290,6 +290,18 @@ fn is_mount_point(path: &PathBuf) -> Result<bool> {
 
 fn get_file_size(path: &PathBuf) -> Result<u64> {
     Ok(fs::metadata(path)?.len())
+}
+
+fn wait_pid_exit(pid: i32, timeout: Duration) -> bool {
+    let start_time = Instant::now();
+    let proc_pid = PathBuf::from(&format!("/proc/{pid}"));
+    while proc_pid.exists() {
+        if start_time.elapsed() >= timeout {
+            return false
+        }
+        sleep(Duration::from_millis(50))
+    }
+    true
 }
 
 fn wait_mount(path: &PathBuf, timeout: Duration) -> bool {
@@ -524,26 +536,14 @@ fn hash_string(data: &str) -> String {
 
 fn fast_hash_file(path: &PathBuf, offset: u64) -> Result<u32> {
     let mut file = File::open(path)?;
-    let file_size = get_file_size(path)? - offset;
-
-    let mut buffer = [0u8; 16];
-    let mut hasher = Xxh3::new();
-
-    file.seek(SeekFrom::Start(offset))?;
-    file.read_exact(&mut buffer)?;
-    hasher.update(&buffer);
-
-    let middle = file_size / 2;
-    file.seek(SeekFrom::Start(middle))?;
-    file.read_exact(&mut buffer)?;
-    hasher.update(&buffer);
-
-    let end = file_size.saturating_sub(16);
-    file.seek(SeekFrom::Start(end))?;
-    file.read_exact(&mut buffer)?;
-    hasher.update(&buffer);
-
-    Ok(hasher.digest() as u32)
+    let file_size = get_file_size(path)?.saturating_sub(offset);
+    let mut buffer = [0u8; 48];
+    file.read_exact(&mut buffer[0..16])?;
+    file.seek(SeekFrom::Start(file_size / 2))?;
+    file.read_exact(&mut buffer[16..32])?;
+    file.seek(SeekFrom::Start(file_size.saturating_sub(16)))?;
+    file.read_exact(&mut buffer[32..48])?;
+    Ok(xxh3_64(&buffer) as u32)
 }
 
 fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
@@ -615,7 +615,7 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       {}_EXTRACT_AND_RUN=1      Run the {self_name} afer extraction without using FUSE
       NO_CLEANUP=1                   Do not clear the unpacking directory after closing when
                                        using extract and run option for reuse extracted data
-      NO_UNMOUNT=1                   Do not unmount the mount directory after closing 
+      NO_UNMOUNT=1                   Do not unmount the mount directory after closing
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount", arg_pfx.to_uppercase());
@@ -815,7 +815,7 @@ fn main() {
             eprintln!("Failed to get self size: {err}");
             exit(1)
         });
-        if !is_mount_only && (uruntime_extract == 2 || 
+        if !is_mount_only && (uruntime_extract == 2 ||
            (uruntime_extract == 3 && self_size <= MAX_EXTRACT_SELF_SIZE)) {
             is_extract_run = true
         } else {
@@ -845,7 +845,7 @@ and run it with the --{arg_pfx}-help option for more information");
             xxh3_64(&runtime.headers_bytes) as u32 +
             fast_hash_file(&image.path, image.offset).unwrap_or_else(|err|{
                 eprintln!("Failed to get image hash: {err}");
-                exit(1)}) + 
+                exit(1)}) +
             uid
         ).to_string())
     }
@@ -949,24 +949,30 @@ and run it with the --{arg_pfx}-help option for more information");
                         exit_code = code
                     }
                 }
-
-                if !is_extract_run && !is_nounmount {
-                    let _ = kill(child_pid, Signal::SIGTERM);
-                }
             } else {
                 signals_handler(child_pid)
             }
 
-            if is_extract_run {
-                if !is_noclenup {
-                    let _ = remove_dir_all(&tmp_dir);
+            match unsafe { fork() } {
+                Ok(ForkResult::Parent { child: _ }) => { exit(exit_code) }
+                Ok(ForkResult::Child) => {
+                    if !is_extract_run && !is_nounmount {
+                        let _ = kill(child_pid, Signal::SIGTERM);
+                    }
+                    if is_extract_run {
+                        if !is_noclenup {
+                            let _ = remove_dir_all(&tmp_dir);
+                        }
+                    } else if !is_nounmount {
+                        wait_pid_exit(child_pid.into(), Duration::from_millis(1000));
+                    }
+                    remove_tmp_dirs(tmp_dirs);
                 }
-            } else if !is_nounmount {
-                let _ = waitpid(child_pid, None);
+                Err(err) => {
+                    eprintln!("Fork error: {err}");
+                    exit(1)
+                }
             }
-
-            remove_tmp_dirs(tmp_dirs);
-            exit(exit_code)
         }
         Ok(ForkResult::Child) => {
             if let Err(err) = create_tmp_dirs(tmp_dirs) {
