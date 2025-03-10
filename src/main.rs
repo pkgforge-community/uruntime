@@ -5,8 +5,8 @@ use std::{
     env::{self, current_exe},
     time::{self, Duration, Instant},
     hash::{DefaultHasher, Hash, Hasher},
-    os::unix::{prelude::PermissionsExt, fs::{symlink, MetadataExt}},
     io::{Error, ErrorKind::{NotFound, InvalidData}, Read, Result, Seek, SeekFrom},
+    os::unix::{prelude::PermissionsExt, fs::{symlink, MetadataExt}, process::CommandExt},
     fs::{self, File, Permissions, create_dir, create_dir_all, read_to_string, remove_dir, remove_dir_all, remove_file, set_permissions},
 };
 
@@ -28,6 +28,16 @@ const MAX_EXTRACT_SELF_SIZE: u64 = 350 * 1024 * 1024; // 350 MB
 const DWARFS_CACHESIZE: &str = "512M";
 #[cfg(feature = "dwarfs")]
 const DWARFS_BLOCKSIZE: &str = "512K";
+
+cfg_if! {
+    if #[cfg(feature = "appimage")] {
+        const ARG_PFX: &str = "appimage";
+        const SELF_NAME: &str = "AppImage";
+    } else {
+        const ARG_PFX: &str = "runtime";
+        const SELF_NAME: &str = "RunImage";
+    }
+}
 
 #[derive(Debug)]
 struct Runtime {
@@ -233,6 +243,33 @@ fn check_fuse() -> bool {
     true
 }
 
+macro_rules! check_extract {
+    (
+        $is_mount_only:expr,
+        $uruntime_extract:expr,
+        $self_exe:expr,
+        $true_block:block
+    ) => {
+        eprintln!("{}: failed to utilize FUSE during startup!", basename($self_exe.to_str().unwrap()));
+        let self_size = get_file_size($self_exe).unwrap_or_else(|err| {
+            eprintln!("Failed to get self size: {err}");
+            exit(1)
+        });
+        if !$is_mount_only && ($uruntime_extract == 2 || ($uruntime_extract == 3 && 
+            self_size <= MAX_EXTRACT_SELF_SIZE)) {
+            $true_block
+        } else {
+            eprintln!(
+"Cannot mount {SELF_NAME}, please check your FUSE setup.
+You might still be able to extract the contents of this {SELF_NAME}
+if you run it with the --{ARG_PFX}-extract option
+See https://github.com/AppImage/AppImageKit/wiki/FUSE
+and run it with the --{ARG_PFX}-help option for more information");
+            exit(1)
+        }
+    };
+}
+
 fn get_runtime(path: &PathBuf) -> Result<Runtime> {
     let mut file = File::open(path)?;
     let mut elf_header_raw = [0; 64];
@@ -292,7 +329,7 @@ fn get_file_size(path: &PathBuf) -> Result<u64> {
     Ok(fs::metadata(path)?.len())
 }
 
-fn wait_pid_exit(pid: i32, timeout: Duration) -> bool {
+fn wait_pid_exit(pid: Pid, timeout: Duration) -> bool {
     let start_time = Instant::now();
     let proc_pid = PathBuf::from(&format!("/proc/{pid}"));
     while proc_pid.exists() {
@@ -304,10 +341,14 @@ fn wait_pid_exit(pid: i32, timeout: Duration) -> bool {
     true
 }
 
-fn wait_mount(path: &PathBuf, timeout: Duration) -> bool {
+fn wait_mount(pid: Pid, path: &PathBuf, timeout: Duration) -> bool {
     let start_time = Instant::now();
+    let proc_pid = PathBuf::from(&format!("/proc/{pid}"));
+    spawn(move || waitpid(pid, None) );
     while !path.exists() || !is_mount_point(path).unwrap_or(false) {
-        if start_time.elapsed() >= timeout {
+        if !proc_pid.exists() {
+            return false
+        } else if start_time.elapsed() >= timeout {
             eprintln!("Timeout reached while waiting for mount: {:?}", path);
             return false
         }
@@ -548,55 +589,47 @@ fn fast_hash_file(path: &PathBuf, offset: u64) -> Result<u32> {
 }
 
 fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
-    cfg_if! {
-        if #[cfg(feature = "appimage")] {
-            let arg_pfx = "appimage";
-            let self_name = "AppImage";
-        } else {
-            let arg_pfx = "runtime";
-            let self_name = "RunImage";
-        }
-    }
     println!("{} v{URUNTIME_VERSION}
+   Repository: {}
 
    Runtime options:
-    --{arg_pfx}-extract [PATTERN]          Extract content from embedded filesystem image
+    --{ARG_PFX}-extract [PATTERN]          Extract content from embedded filesystem image
                                              If pattern is passed, only extract matching files
-     --{arg_pfx}-extract-and-run [ARGS]    Run the {self_name} afer extraction without using FUSE
-     --{arg_pfx}-offset                    Print byte offset to start of embedded filesystem image
-     --{arg_pfx}-portable-home             Create a portable home folder to use as $HOME
-     --{arg_pfx}-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
-     --{arg_pfx}-help                      Print this help
-     --{arg_pfx}-version                   Print version of Runtime
-     --{arg_pfx}-signature                 Print digital signature embedded in {self_name}
-     --{arg_pfx}-updateinfo[rmation]       Print update info embedded in {self_name}
-     --{arg_pfx}-mount                     Mount embedded filesystem image and print
+     --{ARG_PFX}-extract-and-run [ARGS]    Run the {SELF_NAME} afer extraction without using FUSE
+     --{ARG_PFX}-offset                    Print byte offset to start of embedded filesystem image
+     --{ARG_PFX}-portable-home             Create a portable home folder to use as $HOME
+     --{ARG_PFX}-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
+     --{ARG_PFX}-help                      Print this help
+     --{ARG_PFX}-version                   Print version of Runtime
+     --{ARG_PFX}-signature                 Print digital signature embedded in {SELF_NAME}
+     --{ARG_PFX}-updateinfo[rmation]       Print update info embedded in {SELF_NAME}
+     --{ARG_PFX}-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C",
-    env!("CARGO_PKG_DESCRIPTION"));
+    env!("CARGO_PKG_DESCRIPTION"), env!("CARGO_PKG_REPOSITORY"));
 
     println!("\n    Embedded tools options:");
     #[cfg(feature = "squashfs")]
-    println!("      --{arg_pfx}-squashfuse    [ARGS]       Launch squashfuse");
+    println!("      --{ARG_PFX}-squashfuse    [ARGS]       Launch squashfuse");
     #[cfg(feature = "squashfs")]
-    println!("      --{arg_pfx}-unsquashfs    [ARGS]       Launch unsquashfs");
+    println!("      --{ARG_PFX}-unsquashfs    [ARGS]       Launch unsquashfs");
     #[cfg(feature = "mksquashfs")]
-    println!("      --{arg_pfx}-mksquashfs    [ARGS]       Launch mksquashfs");
+    println!("      --{ARG_PFX}-mksquashfs    [ARGS]       Launch mksquashfs");
     #[cfg(feature = "dwarfs")]
-    println!("      --{arg_pfx}-dwarfs        [ARGS]       Launch dwarfs");
+    println!("      --{ARG_PFX}-dwarfs        [ARGS]       Launch dwarfs");
     #[cfg(feature = "dwarfs")]
-    println!("      --{arg_pfx}-dwarfsck      [ARGS]       Launch dwarfsck");
+    println!("      --{ARG_PFX}-dwarfsck      [ARGS]       Launch dwarfsck");
     #[cfg(feature = "dwarfs")]
-    println!("      --{arg_pfx}-mkdwarfs      [ARGS]       Launch mkdwarfs");
+    println!("      --{ARG_PFX}-mkdwarfs      [ARGS]       Launch mkdwarfs");
     #[cfg(feature = "dwarfs")]
-    println!("      --{arg_pfx}-dwarfsextract [ARGS]       Launch dwarfsextract");
+    println!("      --{ARG_PFX}-dwarfsextract [ARGS]       Launch dwarfsextract");
     println!("
       Also you can create a hardlink, symlink or rename the runtime with
       the name of the built-in utility to use it directly.");
 
     println!("\n    Portable home and config:
 
-      If you would like the application contained inside this {self_name} to store its
-      data alongside this {self_name} rather than in your home directory, then you can
+      If you would like the application contained inside this {SELF_NAME} to store its
+      data alongside this {SELF_NAME} rather than in your home directory, then you can
       place a directory named
 
       for portable-home:
@@ -605,23 +638,23 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       for portable-config:
       {:?}
 
-      Or you can invoke this {self_name} with the --{arg_pfx}-portable-home or
-      --{arg_pfx}-portable-config option, which will create this directory for you.
+      Or you can invoke this {SELF_NAME} with the --{ARG_PFX}-portable-home or
+      --{ARG_PFX}-portable-config option, which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
-      application contained inside this {self_name} to store its data in this
+      application contained inside this {SELF_NAME} to store its data in this
       directory rather than in your home directory", portable_home, portable_config);
 
     println!("\n    Environment variables:
 
-      {}_EXTRACT_AND_RUN=1      Run the {self_name} afer extraction without using FUSE
+      {}_EXTRACT_AND_RUN=1      Run the {SELF_NAME} afer extraction without using FUSE
       NO_CLEANUP=1                   Do not clear the unpacking directory after closing when
                                        using extract and run option for reuse extracted data
       NO_UNMOUNT=1                   Do not unmount the mount directory after closing
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
-      FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount", arg_pfx.to_uppercase());
+      FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount", ARG_PFX.to_uppercase());
       #[cfg(feature = "appimage")]
-      println!("      TARGET_APPIMAGE=/path          Operate on a target {self_name} rather than this file itself");
+      println!("      TARGET_APPIMAGE=/path          Operate on a target {SELF_NAME} rather than this file itself");
       #[cfg(feature = "dwarfs")]
       println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)");
       #[cfg(feature = "dwarfs")]
@@ -689,20 +722,8 @@ fn main() {
     let mut tmp_dir = PathBuf::from(get_env_var("TMPDIR"));
     if !tmp_dir.exists() { tmp_dir = env::temp_dir() }
 
-    cfg_if! {
-        if #[cfg(feature = "appimage")] {
-            let arg_pfx = "appimage";
-            let self_name = "AppImage";
-            if get_env_var("APPIMAGE_EXTRACT_AND_RUN") == "1" {
-                is_extract_run = true
-            }
-        } else {
-            let arg_pfx = "runtime";
-            let self_name = "RunImage";
-            if get_env_var("RUNTIME_EXTRACT_AND_RUN") == "1" {
-                is_extract_run = true
-            }
-        }
+    if get_env_var(&format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase())) == "1" {
+        is_extract_run = true
     }
 
     let portable_home = &self_exe_dir.join(format!("{self_exe_name}.home"));
@@ -710,34 +731,34 @@ fn main() {
 
     if !arg1.is_empty() {
         match arg1 {
-            arg if arg == format!("--{arg_pfx}-version") => {
+            arg if arg == format!("--{ARG_PFX}-version") => {
                 println!("v{URUNTIME_VERSION}");
                 return
             }
-            arg if arg == format!("--{arg_pfx}-help") => {
+            arg if arg == format!("--{ARG_PFX}-help") => {
                 print_usage(portable_home, portable_config);
                 return
             }
-            arg if arg == format!("--{arg_pfx}-portable-home") => {
+            arg if arg == format!("--{ARG_PFX}-portable-home") => {
                 if let Err(err) = create_dir(portable_home) {
                     eprintln!("Failed to create portable home directory: {:?}: {err}", portable_home)
                 }
                 println!("Portable home directory created: {:?}", portable_home);
                 return
             }
-            arg if arg == format!("--{arg_pfx}-portable-config") => {
+            arg if arg == format!("--{ARG_PFX}-portable-config") => {
                 if let Err(err) = create_dir(portable_config) {
                     eprintln!("Failed to create portable config directory: {:?}: {err}", portable_config)
                 }
                 println!("Portable config directory created: {:?}", portable_config);
                 return
             }
-            arg if arg == format!("--{arg_pfx}-offset") => {
+            arg if arg == format!("--{ARG_PFX}-offset") => {
                 println!("{runtime_size}");
                 return
             }
-            arg if arg == format!("--{arg_pfx}-updateinfo") ||
-                           arg == format!("--{arg_pfx}-updateinformation") => {
+            arg if arg == format!("--{ARG_PFX}-updateinfo") ||
+                           arg == format!("--{ARG_PFX}-updateinformation") => {
                 let updateinfo = get_section_data(runtime.headers_bytes, ".upd_info")
                     .unwrap_or_else(|err|{
                         eprintln!("Failed to get update info: {err}");
@@ -746,7 +767,7 @@ fn main() {
                 println!("{updateinfo}");
                 return
             }
-            arg if arg == format!("--{arg_pfx}-signature") => {
+            arg if arg == format!("--{ARG_PFX}-signature") => {
                 let signature = get_section_data(runtime.headers_bytes, ".sha256_sig")
                     .unwrap_or_else(|err|{
                         eprintln!("Failed to get signature info: {err}");
@@ -756,41 +777,41 @@ fn main() {
                 return
             }
             #[cfg(feature = "squashfs")]
-            arg if arg == format!("--{arg_pfx}-squashfuse") => {
+            arg if arg == format!("--{ARG_PFX}-squashfuse") => {
                 embed.squashfuse(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "squashfs")]
-            arg if arg == format!("--{arg_pfx}-unsquashfs") => {
+            arg if arg == format!("--{ARG_PFX}-unsquashfs") => {
                 embed.unsquashfs(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "mksquashfs")]
-            arg if arg == format!("--{arg_pfx}-mksquashfs") => {
+            arg if arg == format!("--{ARG_PFX}-mksquashfs") => {
                 embed.mksquashfs(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{arg_pfx}-dwarfs") => {
+            arg if arg == format!("--{ARG_PFX}-dwarfs") => {
                 embed.dwarfs(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{arg_pfx}-dwarfsck") => {
+            arg if arg == format!("--{ARG_PFX}-dwarfsck") => {
                 embed.dwarfsck(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{arg_pfx}-mkdwarfs") => {
+            arg if arg == format!("--{ARG_PFX}-mkdwarfs") => {
                 embed.mkdwarfs(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{arg_pfx}-dwarfsextract") => {
+            arg if arg == format!("--{ARG_PFX}-dwarfsextract") => {
                 embed.dwarfsextract(exec_args[1..].to_vec());
                 return
             }
-            ref arg if arg == &format!("--{arg_pfx}-extract-and-run") => {
+            ref arg if arg == &format!("--{ARG_PFX}-extract-and-run") => {
                 exec_args.remove(0);
                 is_extract_run = true
             }
@@ -811,24 +832,9 @@ fn main() {
     };
 
     if (!is_extract_run || is_mount_only) && !check_fuse() {
-        eprintln!("{arg0}: failed to utilize FUSE during startup!");
-        let self_size = get_file_size(self_exe).unwrap_or_else(|err| {
-            eprintln!("Failed to get self size: {err}");
-            exit(1)
+        check_extract!(is_mount_only, uruntime_extract, self_exe, { 
+            is_extract_run = true 
         });
-        if !is_mount_only && (uruntime_extract == 2 ||
-           (uruntime_extract == 3 && self_size <= MAX_EXTRACT_SELF_SIZE)) {
-            is_extract_run = true
-        } else {
-            eprintln!(
-"Cannot mount {self_name}, please check your FUSE setup.
-
-You might still be able to extract the contents of this {self_name}
-if you run it with the --{arg_pfx}-extract option
-See https://github.com/AppImage/AppImageKit/wiki/FUSE
-and run it with the --{arg_pfx}-help option for more information");
-            exit(1)
-        }
     }
 
     if is_extract_run && get_env_var("NO_CLEANUP") == "1" {
@@ -880,12 +886,12 @@ and run it with the --{arg_pfx}-help option for more information");
 
     if !arg1.is_empty() {
         match arg1 {
-            arg if arg == format!("--{arg_pfx}-extract") => {
+            arg if arg == format!("--{ARG_PFX}-extract") => {
                 extract_image(&embed, &image, PathBuf::from("."),
                     false, exec_args.get(1));
                 return
             }
-            arg if arg == format!("--{arg_pfx}-mount") => {
+            arg if arg == format!("--{ARG_PFX}-mount") => {
                 println!("{}", tmp_dir.display());
                 is_mount_only = true
             }
@@ -901,8 +907,15 @@ and run it with the --{arg_pfx}-help option for more information");
                     remove_tmp_dirs(tmp_dirs);
                     exit(1)
                 }
-            } else if !wait_mount(&tmp_dir, Duration::from_millis(1000)) {
+            } else if !wait_mount(child_pid, &tmp_dir, Duration::from_millis(1000)) {
                 remove_tmp_dirs(tmp_dirs);
+                check_extract!(is_mount_only, uruntime_extract, self_exe, { 
+                    let err = Command::new(self_exe)
+                        .env(format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase()), "1")
+                        .args(&exec_args)
+                        .exec();
+                    eprintln!("Failed to exec: {:?}: {err}", self_exe);
+                });
                 exit(1)
             }
 
@@ -943,7 +956,7 @@ and run it with the --{arg_pfx}-help option for more information");
                     .args(&exec_args).spawn().unwrap();
                 let pid = Pid::from_raw(cmd.id() as i32);
 
-                spawn(move || { signals_handler(pid) });
+                spawn(move || signals_handler(pid) );
 
                 if let Ok(status) = cmd.wait() {
                     if let Some(code) = status.code() {
@@ -965,7 +978,7 @@ and run it with the --{arg_pfx}-help option for more information");
                             let _ = remove_dir_all(&tmp_dir);
                         }
                     } else if !is_nounmount {
-                        wait_pid_exit(child_pid.into(), Duration::from_millis(1000));
+                        wait_pid_exit(child_pid, Duration::from_millis(1000));
                     }
                     remove_tmp_dirs(tmp_dirs);
                 }
