@@ -20,7 +20,7 @@ fn main() {
 
     let assets = IndexMap::from([
         #[cfg(feature = "squashfs")]
-        ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.5.2.r10.g775b4cc/squashfuse-musl-mimalloc-{arch}-upx")),
+        ("squashfuse-upx", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.6.0.r0.gac22ad1/squashfuse-musl-mimalloc-{arch}-upx")),
         #[cfg(feature = "squashfs")]
         ("unsquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/unsquashfs-{arch}-upx")),
         #[cfg(feature = "mksquashfs")]

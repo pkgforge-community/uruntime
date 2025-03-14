@@ -5,18 +5,18 @@ use std::{
     env::{self, current_exe},
     time::{self, Duration, Instant},
     hash::{DefaultHasher, Hash, Hasher},
-    io::{Error, ErrorKind::{NotFound, InvalidData}, Read, Result, Seek, SeekFrom},
+    io::{Error, ErrorKind::{NotFound, InvalidData}, Read, Write, Result, Seek, SeekFrom},
     os::unix::{prelude::PermissionsExt, fs::{symlink, MetadataExt}, process::CommandExt},
     fs::{self, File, Permissions, create_dir, create_dir_all, read_to_string, remove_dir, remove_dir_all, remove_file, set_permissions},
 };
 
 use which::which;
 use cfg_if::cfg_if;
-use goblin::elf::Elf;
 use xxhash_rust::xxh3::xxh3_64;
+use goblin::elf::{Elf, SectionHeader};
 use memfd_exec::{MemFdExecutable, Stdio};
 use nix::{libc, sys::{wait::waitpid, signal::{Signal, kill}}};
-use nix::unistd::{access, fork, getcwd, AccessFlags, ForkResult, Pid};
+use nix::unistd::{access, fork, setsid, getcwd, AccessFlags, ForkResult, Pid};
 use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals};
 
 const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -41,6 +41,7 @@ cfg_if! {
 
 #[derive(Debug)]
 struct Runtime {
+    path: PathBuf,
     size: u64,
     headers_bytes: Vec<u8>,
 }
@@ -79,52 +80,62 @@ impl Embed {
         }
     }
 
-    fn embed_exec(&self, exec_name: &str, exec_bytes: &[u8], exec_args: Vec<String>) {
-        MemFdExecutable::new(exec_name, exec_bytes)
-            .args(exec_args)
-            .envs(env::vars())
-            .exec(Stdio::inherit());
-    }
-
     #[cfg(feature = "squashfs")]
     fn squashfuse(&self, exec_args: Vec<String>) {
-        self.embed_exec("squashfuse", &self.squashfuse, exec_args);
+        mfd_exec("squashfuse", &self.squashfuse, exec_args);
     }
 
     #[cfg(feature = "squashfs")]
     fn unsquashfs(&self, exec_args: Vec<String>) {
-        self.embed_exec("unsquashfs", &self.unsquashfs, exec_args);
+        mfd_exec("unsquashfs", &self.unsquashfs, exec_args);
+    }
+
+    #[cfg(feature = "squashfs")]
+    fn sqfscat(&self, exec_args: Vec<String>) {
+        mfd_exec("sqfscat", &self.unsquashfs, exec_args);
     }
 
     #[cfg(feature = "mksquashfs")]
     fn mksquashfs(&self, exec_args: Vec<String>) {
-        self.embed_exec("mksquashfs", &self.mksquashfs, exec_args);
+        mfd_exec("mksquashfs", &self.mksquashfs, exec_args);
+    }
+
+    #[cfg(feature = "mksquashfs")]
+    fn sqfstar(&self, exec_args: Vec<String>) {
+        mfd_exec("sqfstar", &self.mksquashfs, exec_args);
     }
 
     #[cfg(feature = "dwarfs")]
     fn dwarfs(&self, exec_args: Vec<String>) {
-        self.embed_exec("dwarfs", &self.dwarfs_universal, exec_args);
+        mfd_exec("dwarfs", &self.dwarfs_universal, exec_args);
     }
 
     #[cfg(feature = "dwarfs")]
     fn dwarfsck(&self, exec_args: Vec<String>) {
-        self.embed_exec("dwarfsck", &self.dwarfs_universal, exec_args);
+        mfd_exec("dwarfsck", &self.dwarfs_universal, exec_args);
     }
 
     #[cfg(feature = "dwarfs")]
     fn mkdwarfs(&self, exec_args: Vec<String>) {
-        self.embed_exec("mkdwarfs", &self.dwarfs_universal, exec_args);
+        mfd_exec("mkdwarfs", &self.dwarfs_universal, exec_args);
     }
 
     #[cfg(feature = "dwarfs")]
     fn dwarfsextract(&self, exec_args: Vec<String>) {
-        self.embed_exec("dwarfsextract", &self.dwarfs_universal, exec_args);
+        mfd_exec("dwarfsextract", &self.dwarfs_universal, exec_args);
     }
 
     #[cfg(feature = "dwarfs")]
     fn dwarfs_universal(&self, exec_args: Vec<String>) {
-        self.embed_exec("dwarfs-universal", &self.dwarfs_universal, exec_args);
+        mfd_exec("dwarfs-universal", &self.dwarfs_universal, exec_args);
     }
+}
+
+fn mfd_exec(exec_name: &str, exec_bytes: &[u8], exec_args: Vec<String>) {
+    MemFdExecutable::new(exec_name, exec_bytes)
+        .args(exec_args)
+        .envs(env::vars())
+        .exec(Stdio::inherit());
 }
 
 fn check_memfd_noexec() {
@@ -255,7 +266,7 @@ macro_rules! check_extract {
             eprintln!("Failed to get self size: {err}");
             exit(1)
         });
-        if !$is_mount_only && ($uruntime_extract == 2 || ($uruntime_extract == 3 && 
+        if !$is_mount_only && ($uruntime_extract == 2 || ($uruntime_extract == 3 &&
             self_size <= MAX_EXTRACT_SELF_SIZE)) {
             $true_block
         } else {
@@ -282,7 +293,7 @@ fn get_runtime(path: &PathBuf) -> Result<Runtime> {
     file.seek(SeekFrom::Start(0))?;
     file.read_exact(&mut headers_bytes)?;
     let elf = Elf::parse(&headers_bytes)
-        .map_err(|e| Error::new(InvalidData, e))?;
+        .map_err(|err| Error::new(InvalidData, err))?;
     let section_table_end =
         elf.header.e_shoff + (elf.header.e_shentsize as u64 * elf.header.e_shnum as u64);
     let last_section_end = elf
@@ -291,6 +302,7 @@ fn get_runtime(path: &PathBuf) -> Result<Runtime> {
         .map(|section| section.sh_offset + section.sh_size)
         .unwrap_or(0);
     Ok(Runtime {
+        path: path.to_path_buf(),
         headers_bytes: headers_bytes.clone(),
         size: section_table_end.max(last_section_end),
     })
@@ -329,24 +341,31 @@ fn get_file_size(path: &PathBuf) -> Result<u64> {
     Ok(fs::metadata(path)?.len())
 }
 
-fn wait_pid_exit(pid: Pid, timeout: Duration) -> bool {
+fn is_pid_exists(pid: Pid) -> bool {
+    if PathBuf::from(format!("/proc/{pid}")).exists() {
+        return true
+    }
+    false
+}
+
+fn wait_pid_exit(pid: Pid, timeout: Option<Duration>) -> bool {
     let start_time = Instant::now();
-    let proc_pid = PathBuf::from(&format!("/proc/{pid}"));
-    while proc_pid.exists() {
-        if start_time.elapsed() >= timeout {
-            return false
+    while is_pid_exists(pid) {
+        if let Some(timeout) = timeout {
+            if start_time.elapsed() >= timeout {
+                return false
+            }
         }
-        sleep(Duration::from_millis(50))
+        sleep(Duration::from_millis(10))
     }
     true
 }
 
 fn wait_mount(pid: Pid, path: &PathBuf, timeout: Duration) -> bool {
     let start_time = Instant::now();
-    let proc_pid = PathBuf::from(&format!("/proc/{pid}"));
     spawn(move || waitpid(pid, None) );
     while !path.exists() || !is_mount_point(path).unwrap_or(false) {
-        if !proc_pid.exists() {
+        if !is_pid_exists(pid) {
             return false
         } else if start_time.elapsed() >= timeout {
             eprintln!("Timeout reached while waiting for mount: {:?}", path);
@@ -355,6 +374,13 @@ fn wait_mount(pid: Pid, path: &PathBuf, timeout: Duration) -> bool {
         sleep(Duration::from_millis(2))
     }
     true
+}
+
+fn try_setsid() {
+    if let Err(err) = setsid() {
+        eprintln!("Failed to call setsid: {err}");
+        exit(1)
+    }
 }
 
 fn remove_tmp_dirs(dirs: Vec<&PathBuf> ) {
@@ -549,24 +575,60 @@ fn signals_handler(pid: Pid) {
     }
 }
 
+fn get_section_header(headers_bytes: &[u8], section_name: &str) -> Result<SectionHeader> {
+    let elf = Elf::parse(headers_bytes)
+        .map_err(|err| Error::new(InvalidData, err))?;
+    let section_index = elf.section_headers
+        .iter()
+        .position(|sh| {
+            if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
+                { name == section_name } else { false }
+        })
+        .ok_or(Error::new(InvalidData,
+            format!("Section header with name '{section_name}' not found!")
+        ))?;
+    Ok(elf.section_headers[section_index].clone())
+}
+
 fn get_section_data(headers_bytes: Vec<u8>, section_name: &str) -> Result<String> {
-    let elf = Elf::parse(&headers_bytes)
-        .map_err(|e| Error::new(InvalidData, e))?;
-    for section in elf.section_headers.iter() {
-        if let Some(name) = elf.shdr_strtab.get_at(section.sh_name) {
-            if name == section_name {
-                let section_data = &headers_bytes[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
-                if let Ok(data_str) = str::from_utf8(section_data) {
-                    return Ok(data_str.trim().into());
-                } else {
-                    return Err(Error::new(InvalidData,
-                        format!("Section data is not valid UTF-8: {section_name}")
-                    ));
-                }
-            }
-        }
+    let section = &mut get_section_header(&headers_bytes, section_name)?;
+    let section_data = &headers_bytes[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
+    if let Ok(data_str) = str::from_utf8(section_data) {
+        Ok(data_str.trim().into())
+    } else {
+        Err(Error::new(InvalidData,
+            format!("Section data is not valid UTF-8: {section_name}")
+        ))
     }
-    Err(Error::new(NotFound, format!("Section not found: {section_name}")))
+}
+
+fn add_section_data(runtime: &Runtime, section_name: &str, exec_args: &[String]) -> Result<()> {
+    if get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())).is_empty() {
+        env::set_var(format!("TARGET_{}", SELF_NAME.to_uppercase()), &runtime.path);
+        mfd_exec("uruntime", &runtime.headers_bytes, exec_args.to_vec());
+    }
+    let section = get_section_header(&runtime.headers_bytes, section_name)?;
+    let offset = section.sh_offset;
+    let original_size = section.sh_size;
+    let string_bytes = if let Some(section_data) = exec_args.get(1)
+        { section_data.as_bytes() } else { &[] };
+    let new_size = string_bytes.len() as u64;
+    if new_size > original_size {
+        return Err(Error::new(InvalidData,
+            "New section header data is larger than the section size!"
+        ));
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&runtime.path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    file.write_all(string_bytes)?;
+    if new_size < original_size {
+        let padding_size = original_size - new_size;
+        let padding = vec![0u8; padding_size as usize];
+        file.write_all(&padding)?;
+    }
+    Ok(())
 }
 
 fn hash_string(data: &str) -> String {
@@ -602,7 +664,9 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
      --{ARG_PFX}-help                      Print this help
      --{ARG_PFX}-version                   Print version of Runtime
      --{ARG_PFX}-signature                 Print digital signature embedded in {SELF_NAME}
+     --{ARG_PFX}-addsign         'SIGN'    Add digital signature to {SELF_NAME}
      --{ARG_PFX}-updateinfo[rmation]       Print update info embedded in {SELF_NAME}
+     --{ARG_PFX}-addupdinfo      'INFO'    Add update info to {SELF_NAME}
      --{ARG_PFX}-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C",
     env!("CARGO_PKG_DESCRIPTION"), env!("CARGO_PKG_REPOSITORY"));
@@ -612,8 +676,12 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     println!("      --{ARG_PFX}-squashfuse    [ARGS]       Launch squashfuse");
     #[cfg(feature = "squashfs")]
     println!("      --{ARG_PFX}-unsquashfs    [ARGS]       Launch unsquashfs");
+    #[cfg(feature = "squashfs")]
+    println!("      --{ARG_PFX}-sqfscat       [ARGS]       Launch sqfscat");
     #[cfg(feature = "mksquashfs")]
     println!("      --{ARG_PFX}-mksquashfs    [ARGS]       Launch mksquashfs");
+    #[cfg(feature = "mksquashfs")]
+    println!("      --{ARG_PFX}-sqfstar       [ARGS]       Launch sqfstar");
     #[cfg(feature = "dwarfs")]
     println!("      --{ARG_PFX}-dwarfs        [ARGS]       Launch dwarfs");
     #[cfg(feature = "dwarfs")]
@@ -652,9 +720,9 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       NO_UNMOUNT=1                   Do not unmount the mount directory after closing
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
-      FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount", ARG_PFX.to_uppercase());
-      #[cfg(feature = "appimage")]
-      println!("      TARGET_APPIMAGE=/path          Operate on a target {SELF_NAME} rather than this file itself");
+      FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
+      TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself",
+        ARG_PFX.to_uppercase(), SELF_NAME.to_uppercase());
       #[cfg(feature = "dwarfs")]
       println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)");
       #[cfg(feature = "dwarfs")]
@@ -667,16 +735,8 @@ fn main() {
     check_memfd_noexec();
     let embed = Embed::new();
 
-    #[allow(unused_mut)]
-    let mut self_exe = &current_exe().unwrap();
-    cfg_if! {
-        if #[cfg(feature = "appimage")] {
-            let target_appimage = PathBuf::from(get_env_var("TARGET_APPIMAGE"));
-            if target_appimage.is_file() {
-                self_exe = &target_appimage;
-            }
-        }
-    }
+    let target_image = PathBuf::from(get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())));
+    let self_exe = if target_image.is_file() { &target_image } else { &current_exe().unwrap() };
 
     let self_exe_dir = self_exe.parent().unwrap();
     let self_exe_name = self_exe.file_name().unwrap().to_str().unwrap();
@@ -695,8 +755,12 @@ fn main() {
         "squashfuse"       => { embed.squashfuse(exec_args); return }
         #[cfg(feature = "squashfs")]
         "unsquashfs"       => { embed.unsquashfs(exec_args); return }
+        #[cfg(feature = "squashfs")]
+        "sqfscat"       => { embed.sqfscat(exec_args); return }
         #[cfg(feature = "mksquashfs")]
         "mksquashfs"       => { embed.mksquashfs(exec_args); return }
+        #[cfg(feature = "mksquashfs")]
+        "sqfstar"       => { embed.sqfstar(exec_args); return }
         #[cfg(feature = "dwarfs")]
         "dwarfs"           => { embed.dwarfs(exec_args); return }
         #[cfg(feature = "dwarfs")]
@@ -767,6 +831,13 @@ fn main() {
                 println!("{updateinfo}");
                 return
             }
+            arg if arg == format!("--{ARG_PFX}-addupdinfo") => {
+                if let Err(err) = add_section_data(&runtime, ".upd_info", &exec_args) {
+                    eprintln!("Failed to add update info: {err}");
+                    exit(1)
+                };
+                return
+            }
             arg if arg == format!("--{ARG_PFX}-signature") => {
                 let signature = get_section_data(runtime.headers_bytes, ".sha256_sig")
                     .unwrap_or_else(|err|{
@@ -774,6 +845,13 @@ fn main() {
                         exit(1)
                 });
                 println!("{signature}");
+                return
+            }
+            arg if arg == format!("--{ARG_PFX}-addsign") => {
+                if let Err(err) = add_section_data(&runtime, ".sha256_sig", &exec_args) {
+                    eprintln!("Failed to add signature info: {err}");
+                    exit(1)
+                };
                 return
             }
             #[cfg(feature = "squashfs")]
@@ -786,9 +864,19 @@ fn main() {
                 embed.unsquashfs(exec_args[1..].to_vec());
                 return
             }
+            #[cfg(feature = "squashfs")]
+            arg if arg == format!("--{ARG_PFX}-sqfscat") => {
+                embed.sqfscat(exec_args[1..].to_vec());
+                return
+            }
             #[cfg(feature = "mksquashfs")]
             arg if arg == format!("--{ARG_PFX}-mksquashfs") => {
                 embed.mksquashfs(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "mksquashfs")]
+            arg if arg == format!("--{ARG_PFX}-sqfstar") => {
+                embed.sqfstar(exec_args[1..].to_vec());
                 return
             }
             #[cfg(feature = "dwarfs")]
@@ -832,8 +920,8 @@ fn main() {
     };
 
     if (!is_extract_run || is_mount_only) && !check_fuse() {
-        check_extract!(is_mount_only, uruntime_extract, self_exe, { 
-            is_extract_run = true 
+        check_extract!(is_mount_only, uruntime_extract, self_exe, {
+            is_extract_run = true
         });
     }
 
@@ -909,7 +997,7 @@ fn main() {
                 }
             } else if !wait_mount(child_pid, &tmp_dir, Duration::from_millis(1000)) {
                 remove_tmp_dirs(tmp_dirs);
-                check_extract!(is_mount_only, uruntime_extract, self_exe, { 
+                check_extract!(is_mount_only, uruntime_extract, self_exe, {
                     let err = Command::new(self_exe)
                         .env(format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase()), "1")
                         .args(&exec_args)
@@ -964,21 +1052,24 @@ fn main() {
                     }
                 }
             } else {
-                signals_handler(child_pid)
+                spawn(move || signals_handler(child_pid) );
+                wait_pid_exit(child_pid, None);
             }
 
             match unsafe { fork() } {
                 Ok(ForkResult::Parent { child: _ }) => { exit(exit_code) }
                 Ok(ForkResult::Child) => {
-                    if !is_extract_run && !is_nounmount {
+                    try_setsid();
+
+                    if !is_extract_run && !is_nounmount && !is_mount_only {
                         let _ = kill(child_pid, Signal::SIGTERM);
                     }
                     if is_extract_run {
                         if !is_noclenup {
                             let _ = remove_dir_all(&tmp_dir);
                         }
-                    } else if !is_nounmount {
-                        wait_pid_exit(child_pid, Duration::from_millis(1000));
+                    } else if !is_nounmount && !is_mount_only {
+                        wait_pid_exit(child_pid, Some(Duration::from_millis(1000)));
                     }
                     remove_tmp_dirs(tmp_dirs);
                 }
@@ -989,6 +1080,8 @@ fn main() {
             }
         }
         Ok(ForkResult::Child) => {
+            try_setsid();
+
             if let Err(err) = create_tmp_dirs(tmp_dirs) {
                 eprintln!("Failed to create tmp dir: {err}");
                 exit(1)

@@ -59,14 +59,18 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
      --runtime-help                      Print this help
      --runtime-version                   Print version of Runtime
      --runtime-signature                 Print digital signature embedded in RunImage
+     --runtime-addsign         'SIGN'    Add digital signature to RunImage
      --runtime-updateinfo[rmation]       Print update info embedded in RunImage
+     --runtime-addupdinfo      'INFO'    Add update info to RunImage
      --runtime-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C
 
     Embedded tools options:
       --runtime-squashfuse    [ARGS]       Launch squashfuse
       --runtime-unsquashfs    [ARGS]       Launch unsquashfs
+      --runtime-sqfscat       [ARGS]       Launch sqfscat
       --runtime-mksquashfs    [ARGS]       Launch mksquashfs
+      --runtime-sqfstar       [ARGS]       Launch sqfstar
       --runtime-dwarfs        [ARGS]       Launch dwarfs
       --runtime-dwarfsck      [ARGS]       Launch dwarfsck
       --runtime-mkdwarfs      [ARGS]       Launch mkdwarfs
@@ -102,6 +106,7 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
+      TARGET_RUNIMAGE=/path          Operate on a target RunImage rather than this file itself
       DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
@@ -119,14 +124,18 @@ See [Build step in ci.yml](https://github.com/VHSgunzo/uruntime/blob/main/.githu
      --appimage-help                      Print this help
      --appimage-version                   Print version of Runtime
      --appimage-signature                 Print digital signature embedded in AppImage
+     --appimage-addsign         'SIGN'    Add digital signature to AppImage
      --appimage-updateinfo[rmation]       Print update info embedded in AppImage
+     --appimage-addupdinfo      'INFO'    Add update info to AppImage
      --appimage-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C
 
     Embedded tools options:
       --appimage-squashfuse    [ARGS]       Launch squashfuse
       --appimage-unsquashfs    [ARGS]       Launch unsquashfs
+      --appimage-sqfscat       [ARGS]       Launch sqfscat
       --appimage-mksquashfs    [ARGS]       Launch mksquashfs
+      --appimage-sqfstar       [ARGS]       Launch sqfstar
       --appimage-dwarfs        [ARGS]       Launch dwarfs
       --appimage-dwarfsck      [ARGS]       Launch dwarfsck
       --appimage-mkdwarfs      [ARGS]       Launch mkdwarfs
