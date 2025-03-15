@@ -735,18 +735,6 @@ fn main() {
     check_memfd_noexec();
     let embed = Embed::new();
 
-    let target_image = PathBuf::from(get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())));
-    let self_exe = if target_image.is_file() { &target_image } else { &current_exe().unwrap() };
-
-    let self_exe_dir = self_exe.parent().unwrap();
-    let self_exe_name = self_exe.file_name().unwrap().to_str().unwrap();
-
-    let runtime = get_runtime(self_exe).unwrap_or_else(|err|{
-        eprintln!("Failed to get runtime: {err}");
-        exit(1)
-    });
-    let runtime_size = runtime.size;
-
     let mut exec_args: Vec<String> = env::args().collect();
     let arg0 = &exec_args.remove(0);
 
@@ -778,6 +766,66 @@ fn main() {
         exec_args[0].to_string()
     } else {"".into()};
 
+    if !arg1.is_empty() {
+        match arg1 {
+            #[cfg(feature = "squashfs")]
+            arg if arg == format!("--{ARG_PFX}-squashfuse") => {
+                embed.squashfuse(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "squashfs")]
+            arg if arg == format!("--{ARG_PFX}-unsquashfs") => {
+                embed.unsquashfs(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "squashfs")]
+            arg if arg == format!("--{ARG_PFX}-sqfscat") => {
+                embed.sqfscat(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "mksquashfs")]
+            arg if arg == format!("--{ARG_PFX}-mksquashfs") => {
+                embed.mksquashfs(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "mksquashfs")]
+            arg if arg == format!("--{ARG_PFX}-sqfstar") => {
+                embed.sqfstar(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "dwarfs")]
+            arg if arg == format!("--{ARG_PFX}-dwarfs") => {
+                embed.dwarfs(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "dwarfs")]
+            arg if arg == format!("--{ARG_PFX}-dwarfsck") => {
+                embed.dwarfsck(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "dwarfs")]
+            arg if arg == format!("--{ARG_PFX}-mkdwarfs") => {
+                embed.mkdwarfs(exec_args[1..].to_vec());
+                return
+            }
+            #[cfg(feature = "dwarfs")]
+            arg if arg == format!("--{ARG_PFX}-dwarfsextract") => {
+                embed.dwarfsextract(exec_args[1..].to_vec());
+                return
+            }
+            _ => {}
+        }
+    }
+
+    let target_image = PathBuf::from(get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())));
+    let self_exe = if target_image.is_file() { &target_image } else { &current_exe().unwrap() };
+
+    let runtime = get_runtime(self_exe).unwrap_or_else(|err|{
+        eprintln!("Failed to get runtime: {err}");
+        exit(1)
+    });
+    let runtime_size = runtime.size;
+
     let mut is_mount_only = false;
     let mut is_extract_run = false;
     let mut is_noclenup = !matches!(URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str(), "=1");
@@ -790,17 +838,20 @@ fn main() {
         is_extract_run = true
     }
 
+    let self_exe_dir = self_exe.parent().unwrap();
+    let self_exe_name = self_exe.file_name().unwrap().to_str().unwrap();
+
     let portable_home = &self_exe_dir.join(format!("{self_exe_name}.home"));
     let portable_config = &self_exe_dir.join(format!("{self_exe_name}.config"));
 
     if !arg1.is_empty() {
         match arg1 {
-            arg if arg == format!("--{ARG_PFX}-version") => {
-                println!("v{URUNTIME_VERSION}");
-                return
-            }
             arg if arg == format!("--{ARG_PFX}-help") => {
                 print_usage(portable_home, portable_config);
+                return
+            }
+            arg if arg == format!("--{ARG_PFX}-version") => {
+                println!("v{URUNTIME_VERSION}");
                 return
             }
             arg if arg == format!("--{ARG_PFX}-portable-home") => {
@@ -852,51 +903,6 @@ fn main() {
                     eprintln!("Failed to add signature info: {err}");
                     exit(1)
                 };
-                return
-            }
-            #[cfg(feature = "squashfs")]
-            arg if arg == format!("--{ARG_PFX}-squashfuse") => {
-                embed.squashfuse(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "squashfs")]
-            arg if arg == format!("--{ARG_PFX}-unsquashfs") => {
-                embed.unsquashfs(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "squashfs")]
-            arg if arg == format!("--{ARG_PFX}-sqfscat") => {
-                embed.sqfscat(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "mksquashfs")]
-            arg if arg == format!("--{ARG_PFX}-mksquashfs") => {
-                embed.mksquashfs(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "mksquashfs")]
-            arg if arg == format!("--{ARG_PFX}-sqfstar") => {
-                embed.sqfstar(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{ARG_PFX}-dwarfs") => {
-                embed.dwarfs(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{ARG_PFX}-dwarfsck") => {
-                embed.dwarfsck(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{ARG_PFX}-mkdwarfs") => {
-                embed.mkdwarfs(exec_args[1..].to_vec());
-                return
-            }
-            #[cfg(feature = "dwarfs")]
-            arg if arg == format!("--{ARG_PFX}-dwarfsextract") => {
-                embed.dwarfsextract(exec_args[1..].to_vec());
                 return
             }
             ref arg if arg == &format!("--{ARG_PFX}-extract-and-run") => {
