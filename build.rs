@@ -26,7 +26,7 @@ fn main() {
         #[cfg(feature = "mksquashfs")]
         ("mksquashfs-upx", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/mksquashfs-{arch}-upx")),
         #[cfg(feature = "dwarfs")]
-        ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.11.0/dwarfs-universal-0.11.0-Linux-{arch}-clang")),
+        ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.11.1/dwarfs-universal-0.11.1-Linux-{arch}-clang")),
     ]);
 
     if !assets_path.exists() {
