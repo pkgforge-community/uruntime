@@ -956,9 +956,9 @@ fn main() {
     cfg_if! {
         if #[cfg(feature = "appimage")] {
             let tmp_dir_name: String = if is_extract_run {
-                format!("appimage_extracted_{}", self_hash)
+                format!("appimage_extracted_{self_hash}")
             } else if is_nounmount {
-                format!(".mount_{}", self_hash)
+                format!(".mount_remp{self_hash}")
             } else {
                 format!(".mount_{}", random_string(8))
             };
@@ -969,7 +969,7 @@ fn main() {
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
             let tmp_dir_name: String = if is_extract_run || is_nounmount {
-                self_hash
+                format!("remp{self_hash}")
             } else {
                 random_string(8)
             };
