@@ -768,6 +768,10 @@ fn main() {
 
     if !arg1.is_empty() {
         match arg1 {
+            arg if arg == format!("--{ARG_PFX}-version") => {
+                println!("v{URUNTIME_VERSION}");
+                return
+            }
             #[cfg(feature = "squashfs")]
             arg if arg == format!("--{ARG_PFX}-squashfuse") => {
                 embed.squashfuse(exec_args[1..].to_vec());
@@ -848,10 +852,6 @@ fn main() {
         match arg1 {
             arg if arg == format!("--{ARG_PFX}-help") => {
                 print_usage(portable_home, portable_config);
-                return
-            }
-            arg if arg == format!("--{ARG_PFX}-version") => {
-                println!("v{URUNTIME_VERSION}");
                 return
             }
             arg if arg == format!("--{ARG_PFX}-portable-home") => {
@@ -1094,6 +1094,8 @@ fn main() {
             }
 
             unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) };
+
+            env::set_var("LC_ALL", "C");
 
             if is_extract_run {
                 extract_image(&embed, &image, tmp_dir, is_extract_run, None)
