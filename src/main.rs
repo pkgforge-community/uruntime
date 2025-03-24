@@ -7,7 +7,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{Error, ErrorKind::{NotFound, InvalidData}, Read, Write, Result, Seek, SeekFrom},
     os::unix::{prelude::PermissionsExt, fs::{symlink, MetadataExt}, process::CommandExt},
-    fs::{self, File, Permissions, create_dir, create_dir_all, read_to_string, remove_dir, remove_dir_all, remove_file, set_permissions},
+    fs::{self, File, Permissions, create_dir, create_dir_all, remove_dir, remove_dir_all, remove_file, set_permissions},
 };
 
 use which::which;
@@ -132,28 +132,12 @@ impl Embed {
 }
 
 fn mfd_exec(exec_name: &str, exec_bytes: &[u8], exec_args: Vec<String>) {
-    MemFdExecutable::new(exec_name, exec_bytes)
+    let err = MemFdExecutable::new(exec_name, exec_bytes)
         .args(exec_args)
         .envs(env::vars())
         .exec(Stdio::inherit());
-}
-
-fn check_memfd_noexec() {
-    let noexec_path = PathBuf::from("/proc/sys/vm/memfd_noexec");
-    if noexec_path.exists() {
-        match read_to_string(&noexec_path) {
-            Ok(data) => {
-                if !data.contains("0") {
-                    eprint!("You need to enable memfd_noexec == 0: {:?} == {data}", &noexec_path);
-                    exit(1)
-                }
-            }
-            Err(err) => {
-                eprintln!("Failed to read memfd_noexec: {err}: {:?}", &noexec_path);
-                exit(1)
-            }
-        }
-    }
+    eprintln!("Failed to execute {exec_name}: {err}");
+    exit(1)
 }
 
 fn get_image(path: &PathBuf, offset: u64) -> Result<Image> {
@@ -732,7 +716,6 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
 }
 
 fn main() {
-    check_memfd_noexec();
     let embed = Embed::new();
 
     let mut exec_args: Vec<String> = env::args().collect();
@@ -835,8 +818,7 @@ fn main() {
     let mut is_noclenup = !matches!(URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str(), "=1");
     let mut is_nounmount = !matches!(URUNTIME_MOUNT.replace("URUNTIME_MOUNT=", "=").as_str(), "=1");
 
-    let mut tmp_dir = PathBuf::from(get_env_var("TMPDIR"));
-    if !tmp_dir.exists() { tmp_dir = env::temp_dir() }
+    let mut tmp_dir = env::temp_dir();
 
     if get_env_var(&format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase())) == "1" {
         is_extract_run = true
