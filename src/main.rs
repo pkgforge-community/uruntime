@@ -28,6 +28,8 @@ const MAX_EXTRACT_SELF_SIZE: u64 = 350 * 1024 * 1024; // 350 MB
 const DWARFS_CACHESIZE: &str = "512M";
 #[cfg(feature = "dwarfs")]
 const DWARFS_BLOCKSIZE: &str = "512K";
+#[cfg(feature = "dwarfs")]
+const DWARFS_READAHEAD: &str = "16M";
 
 cfg_if! {
     if #[cfg(feature = "appimage")] {
@@ -389,36 +391,13 @@ fn create_tmp_dirs(dirs: Vec<&PathBuf>) -> Result<()> {
 }
 
 #[cfg(feature = "dwarfs")]
-fn get_dwfs_cachesize() -> String {
-    let cachesize_env = get_env_var("DWARFS_CACHESIZE");
-    if cachesize_env.is_empty() {
-        DWARFS_CACHESIZE.into()
+fn get_dwfs_option(option: &str, default: &str) -> String {
+    let option_env = get_env_var(option);
+    if option_env.is_empty() {
+        default.into()
     } else {
-        let opts: Vec<&str> = cachesize_env.split(',').collect();
-        opts.first().unwrap_or(&DWARFS_CACHESIZE).to_string()
-    }
-}
-
-#[cfg(feature = "dwarfs")]
-fn get_dwfs_blocksize() -> String {
-    let blocksize_env = get_env_var("DWARFS_BLOCKSIZE");
-    if blocksize_env.is_empty() {
-        DWARFS_BLOCKSIZE.into()
-    } else {
-        let opts: Vec<&str> = blocksize_env.split(',').collect();
-        opts.first().unwrap_or(&DWARFS_BLOCKSIZE).to_string()
-    }
-}
-
-#[cfg(feature = "dwarfs")]
-fn get_dwfs_workers() -> String {
-    let num_threads = num_cpus::get().to_string();
-    let workers_env = get_env_var("DWARFS_WORKERS");
-    if workers_env.is_empty() {
-        num_threads
-    } else {
-        let opts: Vec<&str> = workers_env.split(',').collect();
-        opts.first().unwrap_or(&num_threads.as_str()).to_string()
+        let opts: Vec<&str> = option_env.split(',').collect();
+        opts.first().unwrap_or(&default).to_string()
     }
 }
 
@@ -436,10 +415,11 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
             embed.dwarfs(vec!["-f".into(),
                 "-o".into(), "ro,nodev,noatime,clone_fd".into(),
                 "-o".into(), "cache_files,no_cache_image".into(),
-                "-o".into(), format!("cachesize={}", get_dwfs_cachesize()),
-                "-o".into(), format!("blocksize={}", get_dwfs_blocksize()),
+                "-o".into(), format!("cachesize={}", get_dwfs_option("DWARFS_CACHESIZE", DWARFS_CACHESIZE)),
+                "-o".into(), format!("blocksize={}", get_dwfs_option("DWARFS_BLOCKSIZE", DWARFS_BLOCKSIZE)),
+                "-o".into(), format!("readahead={}", get_dwfs_option("DWARFS_READAHEAD", DWARFS_READAHEAD)),
                 "-o".into(), "tidy_strategy=time,tidy_interval=500ms,tidy_max_age=1s".into(),
-                "-o".into(), format!("workers={}", get_dwfs_workers()),
+                "-o".into(), format!("workers={}", get_dwfs_option("DWARFS_WORKERS", &num_cpus::get().to_string())),
                 "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset),
                 "-o".into(), "debuglevel=error".into(),
@@ -502,9 +482,9 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
             let mut exec_args = vec![
                 "--input".into(), image_path,
                 "--log-level=error".into(),
-                format!("--cache-size={}", get_dwfs_cachesize()),
+                format!("--cache-size={}", get_dwfs_option("DWARFS_CACHESIZE", DWARFS_CACHESIZE)),
                 format!("--image-offset={}", image.offset),
-                format!("--num-workers={}", get_dwfs_workers()),
+                format!("--num-workers={}", get_dwfs_option("DWARFS_WORKERS", &num_cpus::get().to_string())),
                 "--output".into(), extract_dir,
                 "--stdout-progress".into()
             ];
@@ -707,12 +687,13 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself",
         ARG_PFX.to_uppercase(), SELF_NAME.to_uppercase());
-      #[cfg(feature = "dwarfs")]
-      println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)");
-      #[cfg(feature = "dwarfs")]
-      println!("      DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)");
-      #[cfg(feature = "dwarfs")]
-      println!("      DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)");
+    #[cfg(feature = "dwarfs")]
+    {
+    println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
+      DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_READAHEAD=16M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)");
+    }
 }
 
 fn main() {
