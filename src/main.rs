@@ -29,7 +29,7 @@ const DWARFS_CACHESIZE: &str = "512M";
 #[cfg(feature = "dwarfs")]
 const DWARFS_BLOCKSIZE: &str = "512K";
 #[cfg(feature = "dwarfs")]
-const DWARFS_READAHEAD: &str = "16M";
+const DWARFS_READAHEAD: &str = "32M";
 
 cfg_if! {
     if #[cfg(feature = "appimage")] {
@@ -134,6 +134,8 @@ impl Embed {
 }
 
 fn mfd_exec(exec_name: &str, exec_bytes: &[u8], exec_args: Vec<String>) {
+    env::set_var("LC_ALL", "C");
+    env::set_var("MALLOC_CONF", "background_thread:true,dirty_decay_ms:500,muzzy_decay_ms:500");
     let err = MemFdExecutable::new(exec_name, exec_bytes)
         .args(exec_args)
         .envs(env::vars())
@@ -692,7 +694,7 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
-      DWARFS_READAHEAD=16M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)");
+      DWARFS_READAHEAD=32M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)");
     }
 }
 
@@ -1057,8 +1059,6 @@ fn main() {
             }
 
             unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) };
-
-            env::set_var("LC_ALL", "C");
 
             if is_extract_run {
                 extract_image(&embed, &image, tmp_dir, is_extract_run, None)
