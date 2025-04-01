@@ -220,6 +220,9 @@ fn build(bin: &str) -> Result<(), DynError> {
         build_args.append(&mut vec!["--features", "mksquashfs"]);
     }
 
+    let upx = env::args().nth(2).unwrap_or_default().to_lowercase() == "--upx";
+    if upx { build_args.append(&mut vec!["--features", "upx"]) }
+
     let status = Command::new(cargo)
         .current_dir(project_root())
         .args(build_args)
@@ -235,7 +238,11 @@ fn build(bin: &str) -> Result<(), DynError> {
         .join("release")
         .join(BIN_NAME);
 
-    let dst_bin_name = &format!("{BIN_NAME}-{bin}");
+    let dst_bin_name = if upx {
+        &format!("{BIN_NAME}-{bin}-upx")
+    } else {
+        &format!("{BIN_NAME}-{bin}")
+    };
     let dst = dist_dir().join(dst_bin_name);
 
     rename(&src, &dst)?;

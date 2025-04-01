@@ -25,7 +25,7 @@ const URUNTIME_CLEANUP: &str = "URUNTIME_CLEANUP=1";
 const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=3";
 const MAX_EXTRACT_SELF_SIZE: u64 = 350 * 1024 * 1024; // 350 MB
 #[cfg(feature = "dwarfs")]
-const DWARFS_CACHESIZE: &str = "512M";
+const DWARFS_CACHESIZE: &str = "1024M";
 #[cfg(feature = "dwarfs")]
 const DWARFS_BLOCKSIZE: &str = "512K";
 #[cfg(feature = "dwarfs")]
@@ -70,15 +70,30 @@ struct Embed {
 
 impl Embed {
     fn new() -> Self {
-        Embed {
-            #[cfg(feature = "squashfs")]
-            squashfuse: include_bytes!("../assets/squashfuse-upx").to_vec(),
-            #[cfg(feature = "squashfs")]
-            unsquashfs: include_bytes!("../assets/unsquashfs-upx").to_vec(),
-            #[cfg(feature = "mksquashfs")]
-            mksquashfs: include_bytes!("../assets/mksquashfs-upx").to_vec(),
-            #[cfg(feature = "dwarfs")]
-            dwarfs_universal: include_bytes!("../assets/dwarfs-universal-upx").to_vec(),
+        cfg_if! {
+            if #[cfg(feature = "upx")] {
+                Embed {
+                    #[cfg(feature = "squashfs")]
+                    squashfuse: include_bytes!("../assets/squashfuse-upx").to_vec(),
+                    #[cfg(feature = "squashfs")]
+                    unsquashfs: include_bytes!("../assets/unsquashfs-upx").to_vec(),
+                    #[cfg(feature = "mksquashfs")]
+                    mksquashfs: include_bytes!("../assets/mksquashfs-upx").to_vec(),
+                    #[cfg(feature = "dwarfs")]
+                    dwarfs_universal: include_bytes!("../assets/dwarfs-universal-upx").to_vec(),
+                }
+            } else {
+                Embed {
+                    #[cfg(feature = "squashfs")]
+                    squashfuse: include_bytes!("../assets/squashfuse-zst").to_vec(),
+                    #[cfg(feature = "squashfs")]
+                    unsquashfs: include_bytes!("../assets/unsquashfs-zst").to_vec(),
+                    #[cfg(feature = "mksquashfs")]
+                    mksquashfs: include_bytes!("../assets/mksquashfs-zst").to_vec(),
+                    #[cfg(feature = "dwarfs")]
+                    dwarfs_universal: include_bytes!("../assets/dwarfs-universal-zst").to_vec(),
+                }
+            }
         }
     }
 
@@ -135,7 +150,22 @@ impl Embed {
 
 fn mfd_exec(exec_name: &str, exec_bytes: &[u8], exec_args: Vec<String>) {
     env::set_var("LC_ALL", "C");
-    env::set_var("MALLOC_CONF", "background_thread:true,dirty_decay_ms:500,muzzy_decay_ms:500");
+    if get_env_var("MALLOC_CONF").is_empty() {
+        env::set_var("MALLOC_CONF", "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000")
+    }
+
+    #[cfg(not(feature = "upx"))]
+    fn decompress(exec_name: &str, data: &[u8]) -> Vec<u8> {
+        if exec_name != "uruntime" {
+            let mut decoder = zstd::stream::read::Decoder::new(data).unwrap();
+            let mut decompressed_data = Vec::new();
+            decoder.read_to_end(&mut decompressed_data).unwrap();
+            decompressed_data
+        } else { data.to_vec() }
+    }
+    #[cfg(not(feature = "upx"))]
+    let exec_bytes = &decompress(exec_name, exec_bytes);
+
     let err = MemFdExecutable::new(exec_name, exec_bytes)
         .args(exec_args)
         .envs(env::vars())
@@ -420,7 +450,7 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
                 "-o".into(), format!("cachesize={}", get_dwfs_option("DWARFS_CACHESIZE", DWARFS_CACHESIZE)),
                 "-o".into(), format!("blocksize={}", get_dwfs_option("DWARFS_BLOCKSIZE", DWARFS_BLOCKSIZE)),
                 "-o".into(), format!("readahead={}", get_dwfs_option("DWARFS_READAHEAD", DWARFS_READAHEAD)),
-                "-o".into(), "tidy_strategy=time,tidy_interval=500ms,tidy_max_age=1s".into(),
+                "-o".into(), "tidy_strategy=time,tidy_interval=1s,tidy_max_age=2s,seq_detector=1".into(),
                 "-o".into(), format!("workers={}", get_dwfs_option("DWARFS_WORKERS", &num_cpus::get().to_string())),
                 "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset),
@@ -688,11 +718,11 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself",
-        ARG_PFX.to_uppercase(), SELF_NAME.to_uppercase());
+    ARG_PFX.to_uppercase(), SELF_NAME.to_uppercase());
     #[cfg(feature = "dwarfs")]
     {
     println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
-      DWARFS_CACHESIZE=512M          Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_READAHEAD=32M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)");
     }
