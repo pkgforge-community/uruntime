@@ -144,6 +144,7 @@ RunImage runtime usage
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
+      ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_RUNIMAGE=/path          Operate on a target RunImage rather than this file itself
       DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
@@ -215,6 +216,7 @@ AppImage runtime usage
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
+      ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_APPIMAGE=/path          Operate on a target AppImage rather than this file itself
       DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)

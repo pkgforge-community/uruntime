@@ -444,7 +444,8 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     if image.is_dwar {
         #[cfg(feature = "dwarfs")]
         {
-            embed.dwarfs(vec!["-f".into(),
+            let mut exec_args = vec![
+                image_path, mount_dir, "-f".into(),
                 "-o".into(), "ro,nodev,noatime,clone_fd".into(),
                 "-o".into(), "cache_files,no_cache_image".into(),
                 "-o".into(), format!("cachesize={}", get_dwfs_option("DWARFS_CACHESIZE", DWARFS_CACHESIZE)),
@@ -453,20 +454,28 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
                 "-o".into(), "tidy_strategy=time,tidy_interval=1s,tidy_max_age=2s,seq_detector=1".into(),
                 "-o".into(), format!("workers={}", get_dwfs_option("DWARFS_WORKERS", &num_cpus::get().to_string())),
                 "-o".into(), format!("uid={uid},gid={gid}"),
-                "-o".into(), format!("offset={}", image.offset),
-                "-o".into(), "debuglevel=error".into(),
-                image_path, mount_dir
-            ])
+                "-o".into(), format!("offset={}", image.offset)
+            ];
+            if get_env_var("ENABLE_FUSE_DEBUG") == "1" {
+                exec_args.append(&mut vec!["-o".into(), "debuglevel=debug".into()]);
+            } else {
+                exec_args.append(&mut vec!["-o".into(), "debuglevel=error".into()]);
+            }
+            embed.dwarfs(exec_args)
         }
     } else {
         #[cfg(feature = "squashfs")]
         {
-            embed.squashfuse(vec!["-f".into(),
+            let mut exec_args = vec![
+                image_path, mount_dir, "-f".into(),
                 "-o".into(), "ro,nodev,noatime".into(),
                 "-o".into(), format!("uid={uid},gid={gid}"),
-                "-o".into(), format!("offset={}", image.offset),
-                image_path, mount_dir
-            ])
+                "-o".into(), format!("offset={}", image.offset)
+            ];
+            if get_env_var("ENABLE_FUSE_DEBUG") == "1" {
+                exec_args.append(&mut vec!["-o".into(), "debug".into()]);
+            }
+            embed.squashfuse(exec_args)
         }
     }
 }
@@ -717,6 +726,7 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
+      ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself",
     ARG_PFX.to_uppercase(), SELF_NAME.to_uppercase());
     #[cfg(feature = "dwarfs")]
