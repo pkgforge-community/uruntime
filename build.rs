@@ -6,6 +6,7 @@ use std::{
     fs::{create_dir, remove_file, set_permissions, Permissions}
 };
 
+#[allow(unused_imports)]
 use cfg_if::cfg_if;
 use indexmap::IndexMap;
 
@@ -24,10 +25,18 @@ fn main() {
         ("squashfuse", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.6.0.r0.gac22ad1/squashfuse-musl-mimalloc-{arch}")),
         #[cfg(feature = "squashfs")]
         ("unsquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/unsquashfs-{arch}")),
-        #[cfg(feature = "mksquashfs")]
+        #[cfg(not(feature = "lite"))]
         ("mksquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/mksquashfs-{arch}")),
         #[cfg(feature = "dwarfs")]
-        ("dwarfs-universal", format!("https://github.com/VHSgunzo/dwarfs/releases/download/v0.11.3/dwarfs-universal-{arch}")),
+        {
+            cfg_if! {
+                if #[cfg(feature = "lite")] {
+                    ("dwarfs-fuse-extract-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.12.0/dwarfs-fuse-extract-0.12.0-Linux-{arch}"))
+                } else {
+                    ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.12.0/dwarfs-universal-0.12.0-Linux-{arch}"))
+                }
+            }
+        },
     ]);
 
     if !assets_path.exists() {
@@ -38,20 +47,23 @@ fn main() {
     symlink(&assets_path, &assets_path_link).unwrap();
 
     for asset in assets.keys() {
-        cfg_if! {
-            if #[cfg(feature = "upx")] {
-                let asset_path = assets_path.join(format!("{asset}-upx"));
-                let asset_url = &format!("{}-upx", assets.get(asset).unwrap());
-            } else {
-                let asset_path = assets_path.join(asset);
-                let asset_url = assets.get(asset).unwrap();
-            }
+        #[allow(unused_mut)]
+        let mut asset = *asset;
+        #[allow(unused_mut)]
+        let mut asset_path = assets_path.join(asset);
+        #[allow(unused_mut)]
+        let mut asset_url = assets.get(asset).unwrap().clone();
+
+        #[cfg(feature = "upx")]
+        if !asset.ends_with("-upx") {
+            asset_path = assets_path.join(format!("{asset}-upx"));
+            asset_url = format!("{}-upx", asset_url)
         }
 
         if !asset_path.exists() {
             let output = Command::new("curl").args([
                 "--insecure",
-                "-L", asset_url,
+                "-L", &asset_url,
                 "-o", asset_path.to_str().unwrap()
             ]).output().unwrap_or_else(|err| panic!("Failed to execute curl: {err}: {asset}"));
 
@@ -66,6 +78,24 @@ fn main() {
 
         #[cfg(not(feature = "upx"))]
         {
+            if asset.ends_with("-upx") {
+                asset = &asset.strip_suffix("-upx").unwrap();
+                let asset_noupx_path = assets_path.join(asset);
+                if !asset_noupx_path.exists() {
+                    let output = Command::new("upx").args([
+                        "-d",
+                        asset_path.to_str().unwrap(), "-o",
+                        asset_noupx_path.to_str().unwrap()
+                    ]).output().unwrap_or_else(|err| panic!("Failed to execute upx: {err}"));
+
+                    if !output.status.success() {
+                        eprintln!("Failed to decompress upx asset: {asset}: {}", String::from_utf8_lossy(&output.stderr));
+                        exit(1)
+                    }
+                }
+                asset_path = asset_noupx_path
+            }
+
             let asset_zstd_path = assets_path.join(format!("{asset}-zst"));
             if !asset_zstd_path.exists() {
                 let asset_data = std::fs::read(asset_path).unwrap();

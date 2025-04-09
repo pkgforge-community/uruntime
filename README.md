@@ -20,20 +20,22 @@ cargo xtask
 #     runimage-squashfs-x86_64         build x86_64 RunImage uruntime (SquashFS-only)
 #     runimage-dwarfs-x86_64           build x86_64 RunImage uruntime (DwarFS-only)
 #     appimage-x86_64                  build x86_64 AppImage uruntime
-#     appimage-lite-x86_64             build x86_64 AppImage uruntime (no mksquashfs)
+#     appimage-lite-x86_64             build x86_64 AppImage uruntime (no dwarfsck, mkdwarfs, mksquashfs, sqfstar)
 #     appimage-squashfs-x86_64         build x86_64 AppImage uruntime (SquashFS-only)
-#     appimage-squashfs-lite-x86_64    build x86_64 AppImage uruntime (SquashFS-only no mksquashfs)
+#     appimage-squashfs-lite-x86_64    build x86_64 AppImage uruntime (SquashFS-only no mksquashfs, sqfstar)
 #     appimage-dwarfs-x86_64           build x86_64 AppImage uruntime (DwarFS-only)
+#     appimage-dwarfs-lite-x86_64      build x86_64 AppImage uruntime (DwarFS-only no dwarfsck, mkdwarfs)
 # 
 #     aarch64                          build aarch64 RunImage and AppImage uruntime
 #     runimage-aarch64                 build aarch64 RunImage uruntime
 #     runimage-squashfs-aarch64        build aarch64 RunImage uruntime (SquashFS-only)
 #     runimage-dwarfs-aarch64          build aarch64 RunImage uruntime (DwarFS-only)
 #     appimage-aarch64                 build aarch64 AppImage uruntime
-#     appimage-lite-aarch64            build aarch64 AppImage uruntime (no mksquashfs)
+#     appimage-lite-aarch64            build aarch64 AppImage uruntime (no dwarfsck, mkdwarfs, mksquashfs, sqfstar)
 #     appimage-squashfs-aarch64        build aarch64 AppImage uruntime (SquashFS-only)
-#     appimage-squashfs-lite-aarch64   build aarch64 AppImage uruntime (SquashFS-only no mksquashfs)
+#     appimage-squashfs-lite-aarch64   build aarch64 AppImage uruntime (SquashFS-only no mksquashfs, sqfstar)
 #     appimage-dwarfs-aarch64          build aarch64 AppImage uruntime (DwarFS-only)
+#     appimage-dwarfs-lite-aarch64     build aarch64 AppImage uruntime (DwarFS-only no dwarfsck, mkdwarfs)
 # 
 #     all                              build all of the above
 
@@ -150,6 +152,9 @@ RunImage runtime usage
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_READAHEAD=32M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_PRELOAD_ALL=1           Enable preloading of all blocks from the DwarFS file system
+      DWARFS_ANALYSIS_FILE=/path     A file for profiling open files when launching the application for DwarFS
+      DWARFS_USE_MMAP=1              Use mmap for allocating blocks for DwarFS
 ```
 
 </details> 
@@ -222,6 +227,9 @@ AppImage runtime usage
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_READAHEAD=32M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_PRELOAD_ALL=1           Enable preloading of all blocks from the DwarFS file system
+      DWARFS_ANALYSIS_FILE=/path     A file for profiling open files when launching the application for DwarFS
+      DWARFS_USE_MMAP=1              Use mmap for allocating blocks for DwarFS
 ```
 
 </details> 

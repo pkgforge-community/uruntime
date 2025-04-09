@@ -62,7 +62,7 @@ struct Embed {
     squashfuse: Vec<u8>,
     #[cfg(feature = "squashfs")]
     unsquashfs: Vec<u8>,
-    #[cfg(feature = "mksquashfs")]
+    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
     mksquashfs: Vec<u8>,
     #[cfg(feature = "dwarfs")]
     dwarfs_universal: Vec<u8>,
@@ -77,9 +77,11 @@ impl Embed {
                     squashfuse: include_bytes!("../assets/squashfuse-upx").to_vec(),
                     #[cfg(feature = "squashfs")]
                     unsquashfs: include_bytes!("../assets/unsquashfs-upx").to_vec(),
-                    #[cfg(feature = "mksquashfs")]
+                    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
                     mksquashfs: include_bytes!("../assets/mksquashfs-upx").to_vec(),
-                    #[cfg(feature = "dwarfs")]
+                    #[cfg(all(feature = "lite", feature = "dwarfs"))]
+                    dwarfs_universal: include_bytes!("../assets/dwarfs-fuse-extract-upx").to_vec(),
+                    #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
                     dwarfs_universal: include_bytes!("../assets/dwarfs-universal-upx").to_vec(),
                 }
             } else {
@@ -88,9 +90,11 @@ impl Embed {
                     squashfuse: include_bytes!("../assets/squashfuse-zst").to_vec(),
                     #[cfg(feature = "squashfs")]
                     unsquashfs: include_bytes!("../assets/unsquashfs-zst").to_vec(),
-                    #[cfg(feature = "mksquashfs")]
+                    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
                     mksquashfs: include_bytes!("../assets/mksquashfs-zst").to_vec(),
-                    #[cfg(feature = "dwarfs")]
+                    #[cfg(all(feature = "lite", feature = "dwarfs"))]
+                    dwarfs_universal: include_bytes!("../assets/dwarfs-fuse-extract-zst").to_vec(),
+                    #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
                     dwarfs_universal: include_bytes!("../assets/dwarfs-universal-zst").to_vec(),
                 }
             }
@@ -112,12 +116,12 @@ impl Embed {
         mfd_exec("sqfscat", &self.unsquashfs, exec_args);
     }
 
-    #[cfg(feature = "mksquashfs")]
+    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
     fn mksquashfs(&self, exec_args: Vec<String>) {
         mfd_exec("mksquashfs", &self.mksquashfs, exec_args);
     }
 
-    #[cfg(feature = "mksquashfs")]
+    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
     fn sqfstar(&self, exec_args: Vec<String>) {
         mfd_exec("sqfstar", &self.mksquashfs, exec_args);
     }
@@ -127,12 +131,12 @@ impl Embed {
         mfd_exec("dwarfs", &self.dwarfs_universal, exec_args);
     }
 
-    #[cfg(feature = "dwarfs")]
+    #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
     fn dwarfsck(&self, exec_args: Vec<String>) {
         mfd_exec("dwarfsck", &self.dwarfs_universal, exec_args);
     }
 
-    #[cfg(feature = "dwarfs")]
+    #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
     fn mkdwarfs(&self, exec_args: Vec<String>) {
         mfd_exec("mkdwarfs", &self.dwarfs_universal, exec_args);
     }
@@ -140,11 +144,6 @@ impl Embed {
     #[cfg(feature = "dwarfs")]
     fn dwarfsextract(&self, exec_args: Vec<String>) {
         mfd_exec("dwarfsextract", &self.dwarfs_universal, exec_args);
-    }
-
-    #[cfg(feature = "dwarfs")]
-    fn dwarfs_universal(&self, exec_args: Vec<String>) {
-        mfd_exec("dwarfs-universal", &self.dwarfs_universal, exec_args);
     }
 }
 
@@ -461,6 +460,18 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
             } else {
                 exec_args.append(&mut vec!["-o".into(), "debuglevel=error".into()]);
             }
+            if get_env_var("DWARFS_PRELOAD_ALL") == "1" {
+                exec_args.append(&mut vec!["-o".into(), "preload_all".into()]);
+            } else {
+                exec_args.append(&mut vec!["-o".into(), "preload_category=hotness".into()]);
+            }
+            let dwarfs_analysis_file = get_env_var("DWARFS_ANALYSIS_FILE");
+            if !dwarfs_analysis_file.is_empty() {
+                exec_args.append(&mut vec!["-o".into(), format!("analysis_file={dwarfs_analysis_file}")]);
+            }
+            if get_env_var("DWARFS_USE_MMAP") == "1" {
+                exec_args.append(&mut vec!["-o".into(), "block_allocator=mmap".into()]);
+            }
             embed.dwarfs(exec_args)
         }
     } else {
@@ -683,15 +694,15 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     println!("      --{ARG_PFX}-unsquashfs    [ARGS]       Launch unsquashfs");
     #[cfg(feature = "squashfs")]
     println!("      --{ARG_PFX}-sqfscat       [ARGS]       Launch sqfscat");
-    #[cfg(feature = "mksquashfs")]
+    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
     println!("      --{ARG_PFX}-mksquashfs    [ARGS]       Launch mksquashfs");
-    #[cfg(feature = "mksquashfs")]
+    #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
     println!("      --{ARG_PFX}-sqfstar       [ARGS]       Launch sqfstar");
     #[cfg(feature = "dwarfs")]
     println!("      --{ARG_PFX}-dwarfs        [ARGS]       Launch dwarfs");
-    #[cfg(feature = "dwarfs")]
+    #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
     println!("      --{ARG_PFX}-dwarfsck      [ARGS]       Launch dwarfsck");
-    #[cfg(feature = "dwarfs")]
+    #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
     println!("      --{ARG_PFX}-mkdwarfs      [ARGS]       Launch mkdwarfs");
     #[cfg(feature = "dwarfs")]
     println!("      --{ARG_PFX}-dwarfsextract [ARGS]       Launch dwarfsextract");
@@ -734,7 +745,10 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
     println!("      DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
-      DWARFS_READAHEAD=32M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)");
+      DWARFS_READAHEAD=32M           Set readahead size, in bytes for DwarFS (suffixes K, M, G)
+      DWARFS_PRELOAD_ALL=1           Enable preloading of all blocks from the DwarFS file system
+      DWARFS_ANALYSIS_FILE=/path     A file for profiling open files when launching the application for DwarFS
+      DWARFS_USE_MMAP=1              Use mmap for allocating blocks for DwarFS");
     }
 }
 
@@ -751,20 +765,18 @@ fn main() {
         "unsquashfs"       => { embed.unsquashfs(exec_args); return }
         #[cfg(feature = "squashfs")]
         "sqfscat"       => { embed.sqfscat(exec_args); return }
-        #[cfg(feature = "mksquashfs")]
+        #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
         "mksquashfs"       => { embed.mksquashfs(exec_args); return }
-        #[cfg(feature = "mksquashfs")]
+        #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
         "sqfstar"       => { embed.sqfstar(exec_args); return }
         #[cfg(feature = "dwarfs")]
         "dwarfs"           => { embed.dwarfs(exec_args); return }
-        #[cfg(feature = "dwarfs")]
+        #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
         "dwarfsck"         => { embed.dwarfsck(exec_args); return }
-        #[cfg(feature = "dwarfs")]
+        #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
         "mkdwarfs"         => { embed.mkdwarfs(exec_args); return }
         #[cfg(feature = "dwarfs")]
         "dwarfsextract"    => { embed.dwarfsextract(exec_args); return }
-        #[cfg(feature = "dwarfs")]
-        "dwarfs-universal" => { embed.dwarfs_universal(exec_args); return }
         _ => {}
     }
 
@@ -793,12 +805,12 @@ fn main() {
                 embed.sqfscat(exec_args[1..].to_vec());
                 return
             }
-            #[cfg(feature = "mksquashfs")]
+            #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
             arg if arg == format!("--{ARG_PFX}-mksquashfs") => {
                 embed.mksquashfs(exec_args[1..].to_vec());
                 return
             }
-            #[cfg(feature = "mksquashfs")]
+            #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
             arg if arg == format!("--{ARG_PFX}-sqfstar") => {
                 embed.sqfstar(exec_args[1..].to_vec());
                 return
@@ -808,12 +820,12 @@ fn main() {
                 embed.dwarfs(exec_args[1..].to_vec());
                 return
             }
-            #[cfg(feature = "dwarfs")]
+            #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
             arg if arg == format!("--{ARG_PFX}-dwarfsck") => {
                 embed.dwarfsck(exec_args[1..].to_vec());
                 return
             }
-            #[cfg(feature = "dwarfs")]
+            #[cfg(all(not(feature = "lite"), feature = "dwarfs"))]
             arg if arg == format!("--{ARG_PFX}-mkdwarfs") => {
                 embed.mkdwarfs(exec_args[1..].to_vec());
                 return
