@@ -11,6 +11,14 @@ use cfg_if::cfg_if;
 use indexmap::IndexMap;
 
 
+#[cfg(feature = "dwarfs")]
+const DWARFS_VERSION: &str = "0.12.1";
+#[cfg(feature = "squashfs")]
+const SQUASHFS_TOOLS_VERSION: &str = "4.6.1";
+#[cfg(feature = "squashfs")]
+const SQUASHFUSE_VERSION: &str = "0.6.0.r0.gac22ad1";
+
+
 fn main() {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
@@ -22,18 +30,18 @@ fn main() {
 
     let assets = IndexMap::from([
         #[cfg(feature = "squashfs")]
-        ("squashfuse", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v0.6.0.r0.gac22ad1/squashfuse-musl-mimalloc-{arch}")),
+        ("squashfuse", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v{SQUASHFUSE_VERSION}/squashfuse-musl-mimalloc-{arch}")),
         #[cfg(feature = "squashfs")]
-        ("unsquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/unsquashfs-{arch}")),
+        ("unsquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v{SQUASHFS_TOOLS_VERSION}/unsquashfs-{arch}")),
         #[cfg(not(feature = "lite"))]
-        ("mksquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/mksquashfs-{arch}")),
+        ("mksquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v{SQUASHFS_TOOLS_VERSION}/mksquashfs-{arch}")),
         #[cfg(feature = "dwarfs")]
         {
             cfg_if! {
                 if #[cfg(feature = "lite")] {
-                    ("dwarfs-fuse-extract-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.12.0/dwarfs-fuse-extract-0.12.0-Linux-{arch}"))
+                    ("dwarfs-fuse-extract-upx", format!("https://github.com/mhx/dwarfs/releases/download/v{0}/dwarfs-fuse-extract-{0}-Linux-{arch}", DWARFS_VERSION))
                 } else {
-                    ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v0.12.0/dwarfs-universal-0.12.0-Linux-{arch}"))
+                    ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v{0}/dwarfs-universal-{0}-Linux-{arch}", DWARFS_VERSION))
                 }
             }
         },

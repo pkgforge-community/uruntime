@@ -432,6 +432,33 @@ fn get_dwfs_option(option: &str, default: &str) -> String {
     }
 }
 
+#[cfg(feature = "dwarfs")]
+fn get_dwfs_cachesize() -> String {
+    get_dwfs_option("DWARFS_CACHESIZE",
+    &if let Ok(meminfo) = <procfs::Meminfo as procfs::Current>::current() {
+        let available_memory = meminfo.mem_available.unwrap_or(meminfo.mem_free) as f64;
+        let available_memory_mb = available_memory / 1024.0 / 1024.0 / 1.3;
+        let cache_sizes_mb: [u32; 10] = [1536, 1024, 896, 768, 640, 512, 384, 256, 128, 64];
+        let cache_size_mb = cache_sizes_mb
+            .iter()
+            .find(|threshold| available_memory_mb > (**threshold as f64))
+            .map(|size| *size)
+            .unwrap_or(32);
+        format!("{}M", cache_size_mb)
+    } else {
+        DWARFS_CACHESIZE.into()
+    })
+}
+
+#[cfg(feature = "dwarfs")]
+fn get_dwfs_workers(cachesize: &str, cpus: usize) -> String {
+    get_dwfs_option("DWARFS_WORKERS", &match cachesize {
+        "1536M"|"1024M" => { cpus }
+        "896M" => { 2 }
+        _ => { 1 }
+    }.to_string())
+}
+
 fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     if is_mount_point(&mount_dir).unwrap_or(false) {
         return
@@ -443,18 +470,21 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     if image.is_dwar {
         #[cfg(feature = "dwarfs")]
         {
+            let cpus = num_cpus::get();
+            let cachesize = get_dwfs_cachesize();
+            let workers = get_dwfs_workers(&cachesize, cpus);
             let mut exec_args = vec![
                 image_path, mount_dir, "-f".into(),
-                "-o".into(), "ro,nodev,noatime,clone_fd".into(),
-                "-o".into(), "cache_files,no_cache_image".into(),
-                "-o".into(), format!("cachesize={}", get_dwfs_option("DWARFS_CACHESIZE", DWARFS_CACHESIZE)),
+                "-o".into(), format!("cachesize={cachesize},workers={workers}"),
+                "-o".into(), format!("uid={uid},gid={gid},offset={}", image.offset),
                 "-o".into(), format!("blocksize={}", get_dwfs_option("DWARFS_BLOCKSIZE", DWARFS_BLOCKSIZE)),
                 "-o".into(), format!("readahead={}", get_dwfs_option("DWARFS_READAHEAD", DWARFS_READAHEAD)),
-                "-o".into(), "tidy_strategy=time,tidy_interval=1s,tidy_max_age=2s,seq_detector=1".into(),
-                "-o".into(), format!("workers={}", get_dwfs_option("DWARFS_WORKERS", &num_cpus::get().to_string())),
-                "-o".into(), format!("uid={uid},gid={gid}"),
-                "-o".into(), format!("offset={}", image.offset)
+                "-o".into(), "ro,nodev,noatime,tidy_strategy=time,seq_detector=1,cache_files,no_cache_image".into()
             ];
+            match cachesize.as_str() {
+                "1536M"|"1024M" => { exec_args.append(&mut vec!["-o".into(), "clone_fd,tidy_interval=2s,tidy_max_age=10s".into()]); }
+                _ => { exec_args.append(&mut vec!["-o".into(), "tidy_interval=500ms,tidy_max_age=1s".into()]); }
+            }
             if get_env_var("ENABLE_FUSE_DEBUG") == "1" {
                 exec_args.append(&mut vec!["-o".into(), "debuglevel=debug".into()]);
             } else {
@@ -531,12 +561,13 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
     if image.is_dwar {
         #[cfg(feature = "dwarfs")]
         {
+            let cachesize = get_dwfs_cachesize();
             let mut exec_args = vec![
                 "--input".into(), image_path,
                 "--log-level=error".into(),
-                format!("--cache-size={}", get_dwfs_option("DWARFS_CACHESIZE", DWARFS_CACHESIZE)),
+                format!("--cache-size={cachesize}"),
                 format!("--image-offset={}", image.offset),
-                format!("--num-workers={}", get_dwfs_option("DWARFS_WORKERS", &num_cpus::get().to_string())),
+                format!("--num-workers={}", get_dwfs_workers(&cachesize, num_cpus::get())),
                 "--output".into(), extract_dir,
                 "--stdout-progress".into()
             ];
