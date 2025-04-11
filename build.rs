@@ -33,7 +33,7 @@ fn main() {
         ("squashfuse", format!("https://github.com/VHSgunzo/squashfuse-static/releases/download/v{SQUASHFUSE_VERSION}/squashfuse-musl-mimalloc-{arch}")),
         #[cfg(feature = "squashfs")]
         ("unsquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v{SQUASHFS_TOOLS_VERSION}/unsquashfs-{arch}")),
-        #[cfg(not(feature = "lite"))]
+        #[cfg(all(not(feature = "lite"), feature = "squashfs"))]
         ("mksquashfs", format!("https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v{SQUASHFS_TOOLS_VERSION}/mksquashfs-{arch}")),
         #[cfg(feature = "dwarfs")]
         {
