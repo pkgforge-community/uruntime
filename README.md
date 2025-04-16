@@ -17,8 +17,6 @@ cargo xtask
 # Tasks:
 #     x86_64                           build x86_64 RunImage and AppImage uruntime
 #     runimage-x86_64                  build x86_64 RunImage uruntime
-#     runimage-squashfs-x86_64         build x86_64 RunImage uruntime (SquashFS-only)
-#     runimage-dwarfs-x86_64           build x86_64 RunImage uruntime (DwarFS-only)
 #     appimage-x86_64                  build x86_64 AppImage uruntime
 #     appimage-lite-x86_64             build x86_64 AppImage uruntime (no dwarfsck, mkdwarfs, mksquashfs, sqfstar)
 #     appimage-squashfs-x86_64         build x86_64 AppImage uruntime (SquashFS-only)
@@ -28,8 +26,6 @@ cargo xtask
 # 
 #     aarch64                          build aarch64 RunImage and AppImage uruntime
 #     runimage-aarch64                 build aarch64 RunImage uruntime
-#     runimage-squashfs-aarch64        build aarch64 RunImage uruntime (SquashFS-only)
-#     runimage-dwarfs-aarch64          build aarch64 RunImage uruntime (DwarFS-only)
 #     appimage-aarch64                 build aarch64 AppImage uruntime
 #     appimage-lite-aarch64            build aarch64 AppImage uruntime (no dwarfsck, mkdwarfs, mksquashfs, sqfstar)
 #     appimage-squashfs-aarch64        build aarch64 AppImage uruntime (SquashFS-only)

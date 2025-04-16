@@ -23,8 +23,6 @@ fn main() {
 fn try_main() -> Result<(), DynError> {
     let all_bins = vec![
         "runimage-x86_64",
-        "runimage-squashfs-x86_64",
-        "runimage-dwarfs-x86_64",
         "appimage-x86_64",
         "appimage-lite-x86_64",
         "appimage-squashfs-x86_64",
@@ -33,8 +31,6 @@ fn try_main() -> Result<(), DynError> {
         "appimage-dwarfs-lite-x86_64",
 
         "runimage-aarch64",
-        "runimage-squashfs-aarch64",
-        "runimage-dwarfs-aarch64",
         "appimage-aarch64",
         "appimage-lite-aarch64",
         "appimage-squashfs-aarch64",

@@ -501,6 +501,8 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
             }
             if get_env_var("DWARFS_USE_MMAP") == "1" {
                 exec_args.append(&mut vec!["-o".into(), "block_allocator=mmap".into()]);
+            } else {
+                exec_args.append(&mut vec!["-o".into(), "block_allocator=malloc".into()]);
             }
             embed.dwarfs(exec_args)
         }
