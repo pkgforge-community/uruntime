@@ -144,6 +144,7 @@ RunImage runtime usage
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_RUNIMAGE=/path          Operate on a target RunImage rather than this file itself
+      NO_MEMFDEXEC=1                 Do not use memfd-exec (use a temporary file instead)
       DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)
@@ -219,6 +220,7 @@ AppImage runtime usage
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_APPIMAGE=/path          Operate on a target AppImage rather than this file itself
+      NO_MEMFDEXEC=1                 Do not use memfd-exec (use a temporary file instead)
       DWARFS_WORKERS=2               Number of worker threads for DwarFS (default: equal CPU threads)
       DWARFS_CACHESIZE=1024M         Size of the block cache, in bytes for DwarFS (suffixes K, M, G)
       DWARFS_BLOCKSIZE=512K          Size of the block file I/O, in bytes for DwarFS (suffixes K, M, G)

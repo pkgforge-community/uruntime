@@ -441,8 +441,7 @@ fn get_dwfs_cachesize() -> String {
         let cache_sizes_mb: [u32; 10] = [1536, 1024, 896, 768, 640, 512, 384, 256, 128, 64];
         let cache_size_mb = cache_sizes_mb
             .iter()
-            .find(|threshold| available_memory_mb > (**threshold as f64))
-            .map(|size| *size)
+            .find(|threshold| available_memory_mb > (**threshold as f64)).copied()
             .unwrap_or(32);
         format!("{}M", cache_size_mb)
     } else {
@@ -465,6 +464,7 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
     }
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
+
     let mount_dir = mount_dir.to_str().unwrap().to_string();
     let image_path = image.path.to_str().unwrap().to_string();
     if image.is_dwar {
@@ -475,11 +475,11 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
             let workers = get_dwfs_workers(&cachesize, cpus);
             let mut exec_args = vec![
                 image_path, mount_dir, "-f".into(),
-                "-o".into(), format!("cachesize={cachesize},workers={workers}"),
-                "-o".into(), format!("uid={uid},gid={gid},offset={}", image.offset),
+                "-o".into(), format!("uid={uid},gid={gid}"),
+                "-o".into(), format!("offset={},cachesize={cachesize},workers={workers}", image.offset),
+                "-o".into(), "ro,nodev,tidy_strategy=time,seq_detector=1,cache_files,no_cache_image".into(),
                 "-o".into(), format!("blocksize={}", get_dwfs_option("DWARFS_BLOCKSIZE", DWARFS_BLOCKSIZE)),
                 "-o".into(), format!("readahead={}", get_dwfs_option("DWARFS_READAHEAD", DWARFS_READAHEAD)),
-                "-o".into(), "ro,nodev,noatime,tidy_strategy=time,seq_detector=1,cache_files,no_cache_image".into()
             ];
             match cachesize.as_str() {
                 "1536M"|"1024M" => { exec_args.append(&mut vec!["-o".into(), "clone_fd,tidy_interval=2s,tidy_max_age=10s".into()]); }
@@ -511,7 +511,7 @@ fn mount_image(embed: &Embed, image: &Image, mount_dir: PathBuf) {
         {
             let mut exec_args = vec![
                 image_path, mount_dir, "-f".into(),
-                "-o".into(), "ro,nodev,noatime".into(),
+                "-o".into(), "ro,nodev".into(),
                 "-o".into(), format!("uid={uid},gid={gid}"),
                 "-o".into(), format!("offset={}", image.offset)
             ];
@@ -771,7 +771,8 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
-      TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself",
+      TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself
+      NO_MEMFDEXEC=1                 Do not use memfd-exec (use a temporary file instead)",
     ARG_PFX.to_uppercase(), SELF_NAME.to_uppercase());
     #[cfg(feature = "dwarfs")]
     {
