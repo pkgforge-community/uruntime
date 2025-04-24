@@ -1004,14 +1004,16 @@ fn main() {
 
     drop(runtime);
 
+    let first5name: String = self_exe_name.split(".").next()
+        .unwrap_or(self_exe_name).chars().take(5).collect();
     cfg_if! {
         if #[cfg(feature = "appimage")] {
             let tmp_dir_name: String = if is_extract_run {
-                format!("appimage_extracted_{self_hash}")
+                format!("appimage_extracted_{first5name}{self_hash}")
             } else if is_nounmount {
-                format!(".mount_remp{self_hash}")
+                format!(".mount_{first5name}remp{self_hash}")
             } else {
-                format!(".mount_{}", random_string(8))
+                format!(".mount_{first5name}{}", random_string(6))
             };
             tmp_dir = tmp_dir.join(tmp_dir_name);
             let tmp_dirs = vec![&tmp_dir];
@@ -1020,14 +1022,15 @@ fn main() {
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
             let tmp_dir_name: String = if is_extract_run || is_nounmount {
-                format!("remp{self_hash}")
+                format!("{first5name}remp{self_hash}")
             } else {
-                random_string(8)
+                format!("{first5name}{}", random_string(6))
             };
             tmp_dir = mnt_dir.join(tmp_dir_name);
             let tmp_dirs = vec![&tmp_dir, &mnt_dir, &ruid_dir];
         }
     }
+    drop(first5name);
 
     if !arg1.is_empty() {
         match arg1 {
