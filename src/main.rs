@@ -1021,7 +1021,9 @@ fn main() {
             let uid = unsafe { libc::getuid() };
             let ruid_dir = tmp_dir.join(format!(".r{uid}"));
             let mnt_dir = ruid_dir.join("mnt");
-            let tmp_dir_name: String = if is_extract_run || is_nounmount {
+            let tmp_dir_name: String = if is_extract_run {
+                format!("{first5name}extr{self_hash}")
+            } else if is_nounmount {
                 format!("{first5name}remp{self_hash}")
             } else {
                 format!("{first5name}{}", random_string(6))
