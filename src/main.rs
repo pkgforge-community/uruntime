@@ -7,7 +7,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{Error, ErrorKind::{NotFound, InvalidData}, Read, Write, Result, Seek, SeekFrom},
     os::unix::{prelude::PermissionsExt, fs::{symlink, MetadataExt}, process::CommandExt},
-    fs::{self, File, Permissions, create_dir, create_dir_all, remove_dir, remove_dir_all, remove_file, set_permissions},
+    fs::{self, File, Permissions, create_dir, create_dir_all, remove_dir, remove_dir_all, remove_file, set_permissions, read_to_string},
 };
 
 use which::which;
@@ -595,17 +595,40 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
 }
 
 fn try_set_portable(kind: &str, dir: &PathBuf) {
-    if dir.exists() {
+    if dir.is_dir() {
         match kind {
             "home" => {
-                println!("Setting $HOME to {:?}", dir);
+                eprintln!("Setting $HOME to {:?}", dir);
                 env::set_var("HOME", dir)
             }
             "config" => {
-                println!("Setting $XDG_CONFIG_HOME to {:?}", dir);
+                eprintln!("Setting $XDG_CONFIG_HOME to {:?}", dir);
                 env::set_var("XDG_CONFIG_HOME", dir)
             }
+            "share" => {
+                eprintln!("Setting $XDG_DATA_HOME to {:?}", dir);
+                env::set_var("XDG_DATA_HOME", dir)
+            }
             _ => {}
+        }
+    }
+}
+
+fn try_read_dotenv(dotenv_path: &PathBuf) {
+    if dotenv_path.is_file() {
+        dotenv::from_path(&dotenv_path).ok();
+        if let Ok(data) = read_to_string(&dotenv_path) {
+            eprintln!("Read env file: {:?}", dotenv_path.display());
+            for string in data.trim().split("\n") {
+                let string = string.trim();
+                if string.starts_with("unset ") {
+                    for var_name in string.split_whitespace().skip(1) {
+                        env::remove_var(var_name)
+                    }
+                }
+            }
+        } else {
+            eprintln!("Failed to read env file: {:?}", dotenv_path.display())
         }
     }
 }
@@ -699,7 +722,7 @@ fn fast_hash_file(path: &PathBuf, offset: u64) -> Result<u32> {
     Ok(xxh3_64(&buffer) as u32)
 }
 
-fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
+fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_config: &PathBuf, self_exe_dotenv: &PathBuf) {
     println!("{} v{URUNTIME_VERSION}
    Repository: {}
 
@@ -709,6 +732,7 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
      --{ARG_PFX}-extract-and-run [ARGS]    Run the {SELF_NAME} afer extraction without using FUSE
      --{ARG_PFX}-offset                    Print byte offset to start of embedded filesystem image
      --{ARG_PFX}-portable-home             Create a portable home folder to use as $HOME
+     --{ARG_PFX}-portable-share            Create a portable share folder to use as $XDG_DATA_HOME
      --{ARG_PFX}-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
      --{ARG_PFX}-help                      Print this help
      --{ARG_PFX}-version                   Print version of Runtime
@@ -752,14 +776,18 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       for portable-home:
       {:?}
 
+      for portable-share:
+      {:?}
+
       for portable-config:
       {:?}
 
       Or you can invoke this {SELF_NAME} with the --{ARG_PFX}-portable-home or
-      --{ARG_PFX}-portable-config option, which will create this directory for you.
+      --{ARG_PFX}-portable-share or --{ARG_PFX}-portable-config option,
+      which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
       application contained inside this {SELF_NAME} to store its data in this
-      directory rather than in your home directory", portable_home, portable_config);
+      directory rather than in your home directory", portable_home, portable_share, portable_config);
 
     println!("\n    Environment variables:
 
@@ -784,6 +812,10 @@ fn print_usage(portable_home: &PathBuf, portable_config: &PathBuf) {
       DWARFS_ANALYSIS_FILE=/path     A file for profiling open files when launching the application for DwarFS
       DWARFS_USE_MMAP=1              Use mmap for allocating blocks for DwarFS");
     }
+    println!("
+      Environment variables can be specified in the env file (see https://crates.io/crates/dotenv)
+      and environment variables can also be deleted using `unset ENV_VAR` in the end of the env file:
+      {0:?}", self_exe_dotenv)
 }
 
 fn main() {
@@ -882,6 +914,16 @@ fn main() {
     });
     let runtime_size = runtime.size;
 
+    let self_exe_dir = self_exe.parent().unwrap();
+    let self_exe_name = self_exe.file_name().unwrap().to_str().unwrap();
+
+    let portable_home = &self_exe_dir.join(format!("{self_exe_name}.home"));
+    let portable_share = &self_exe_dir.join(format!("{self_exe_name}.share"));
+    let portable_config = &self_exe_dir.join(format!("{self_exe_name}.config"));
+
+    let self_exe_dotenv = &self_exe_dir.join(format!("{self_exe_name}.env"));
+    try_read_dotenv(self_exe_dotenv);
+
     let mut is_mount_only = false;
     let mut is_extract_run = false;
     let mut is_noclenup = !matches!(URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str(), "=1");
@@ -893,16 +935,10 @@ fn main() {
         is_extract_run = true
     }
 
-    let self_exe_dir = self_exe.parent().unwrap();
-    let self_exe_name = self_exe.file_name().unwrap().to_str().unwrap();
-
-    let portable_home = &self_exe_dir.join(format!("{self_exe_name}.home"));
-    let portable_config = &self_exe_dir.join(format!("{self_exe_name}.config"));
-
     if !arg1.is_empty() {
         match arg1 {
             arg if arg == format!("--{ARG_PFX}-help") => {
-                print_usage(portable_home, portable_config);
+                print_usage(portable_home, portable_share, portable_config, self_exe_dotenv);
                 return
             }
             arg if arg == format!("--{ARG_PFX}-portable-home") => {
@@ -910,6 +946,13 @@ fn main() {
                     eprintln!("Failed to create portable home directory: {:?}: {err}", portable_home)
                 }
                 println!("Portable home directory created: {:?}", portable_home);
+                return
+            }
+            arg if arg == format!("--{ARG_PFX}-portable-share") => {
+                if let Err(err) = create_dir(portable_share) {
+                    eprintln!("Failed to create portable share directory: {:?}: {err}", portable_share)
+                }
+                println!("Portable share directory created: {:?}", portable_share);
                 return
             }
             arg if arg == format!("--{ARG_PFX}-portable-config") => {
@@ -1100,6 +1143,7 @@ fn main() {
                 env::set_var("OWD", getcwd().unwrap());
 
                 try_set_portable("home", portable_home);
+                try_set_portable("share", portable_share);
                 try_set_portable("config", portable_config);
 
                 let mut cmd = Command::new(run.canonicalize().unwrap())

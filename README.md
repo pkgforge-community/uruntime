@@ -91,6 +91,7 @@ RunImage runtime usage
      --runtime-extract-and-run [ARGS]    Run the RunImage afer extraction without using FUSE
      --runtime-offset                    Print byte offset to start of embedded filesystem image
      --runtime-portable-home             Create a portable home folder to use as $HOME
+     --runtime-portable-share            Create a portable share folder to use as $XDG_DATA_HOME
      --runtime-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
      --runtime-help                      Print this help
      --runtime-version                   Print version of Runtime
@@ -124,11 +125,15 @@ RunImage runtime usage
       for portable-home:
       "${RUNTIME_NAME}.home"
 
+      for portable-share:
+      "${RUNTIME_NAME}.share"
+
       for portable-config:
       "${RUNTIME_NAME}.config"
 
       Or you can invoke this RunImage with the --runtime-portable-home or
-      --runtime-portable-config option, which will create this directory for you.
+      --runtime-portable-share or --runtime-portable-config option,
+      which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
       application contained inside this RunImage to store its data in this
       directory rather than in your home directory
@@ -152,6 +157,10 @@ RunImage runtime usage
       DWARFS_PRELOAD_ALL=1           Enable preloading of all blocks from the DwarFS file system
       DWARFS_ANALYSIS_FILE=/path     A file for profiling open files when launching the application for DwarFS
       DWARFS_USE_MMAP=1              Use mmap for allocating blocks for DwarFS
+
+      Environment variables can be specified in the env file (see https://crates.io/crates/dotenv)
+      and environment variables can also be deleted using `unset ENV_VAR` in the end of the env file:
+      "${RUNTIME_NAME}.env"
 ```
 
 </details> 
@@ -167,6 +176,7 @@ AppImage runtime usage
      --appimage-extract-and-run [ARGS]    Run the AppImage afer extraction without using FUSE
      --appimage-offset                    Print byte offset to start of embedded filesystem image
      --appimage-portable-home             Create a portable home folder to use as $HOME
+     --appimage-portable-share            Create a portable share folder to use as $XDG_DATA_HOME
      --appimage-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
      --appimage-help                      Print this help
      --appimage-version                   Print version of Runtime
@@ -204,7 +214,8 @@ AppImage runtime usage
       "${RUNTIME_NAME}.config"
 
       Or you can invoke this AppImage with the --appimage-portable-home or
-      --appimage-portable-config option, which will create this directory for you.
+      --appimage-portable-share or --appimage-portable-config option,
+      which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
       application contained inside this AppImage to store its data in this
       directory rather than in your home directory
@@ -228,6 +239,10 @@ AppImage runtime usage
       DWARFS_PRELOAD_ALL=1           Enable preloading of all blocks from the DwarFS file system
       DWARFS_ANALYSIS_FILE=/path     A file for profiling open files when launching the application for DwarFS
       DWARFS_USE_MMAP=1              Use mmap for allocating blocks for DwarFS
+      
+      Environment variables can be specified in the env file (see https://crates.io/crates/dotenv)
+      and environment variables can also be deleted using `unset ENV_VAR` in the end of the env file:
+      "${RUNTIME_NAME}.env"
 ```
 
 </details> 
