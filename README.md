@@ -81,6 +81,7 @@ sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=1|' /path/uruntime
 
 # URUNTIME_MOUNT=2 - Reuse mount point and unmounting of the mount directory with a delay
 #                    default 120 minutes of inactivity (env var REMP_UMOUNT_DELAY=sec|inf|120)
+sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=2|' /path/uruntime
 
 # URUNTIME_MOUNT=3 - Reuse mount point and unmounting of the mount directory 
 #                    with a one-second delay of inactivity (default)
