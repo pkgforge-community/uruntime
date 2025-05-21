@@ -20,7 +20,7 @@ use nix::unistd::{access, fork, setsid, getcwd, AccessFlags, ForkResult, Pid};
 use signal_hook::{consts::{SIGINT, SIGTERM, SIGQUIT, SIGHUP}, iterator::Signals};
 
 const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
-const URUNTIME_MOUNT: &str = "URUNTIME_MOUNT=1";
+const URUNTIME_MOUNT: &str = "URUNTIME_MOUNT=3";
 const URUNTIME_CLEANUP: &str = "URUNTIME_CLEANUP=1";
 const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=3";
 const MAX_EXTRACT_SELF_SIZE: u64 = 350 * 1024 * 1024; // 350 MB
@@ -358,6 +358,47 @@ fn get_file_size(path: &PathBuf) -> Result<u64> {
     Ok(fs::metadata(path)?.len())
 }
 
+fn is_dir_inuse(mount_point: &PathBuf) -> Result<bool> {
+    for entry in fs::read_dir("/proc")? {
+        if let Ok(target) = fs::read_link(entry?.path().join("exe")) {
+            if target.starts_with(mount_point) {
+                return Ok(true)
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn wait_dir_notuse(
+    mount_point: &PathBuf,
+    timeout: Option<Duration>,
+    delay: Option<Duration>,
+    delay_check: bool) -> bool {
+    let start_time = Instant::now();
+    let default_delay = Duration::from_millis(100);
+    let delay = delay.unwrap_or(default_delay);
+    loop {
+        if delay_check {
+            sleep(delay);
+            for num_check in 1..=5 {
+                if is_dir_inuse(mount_point).unwrap_or(false)
+                { break } else { sleep(default_delay * 2) }
+                if num_check == 5 { return true }
+            }
+        } else {
+            if !is_dir_inuse(mount_point).unwrap_or(false) {
+                return true
+            }
+            if let Some(timeout) = timeout {
+                if start_time.elapsed() >= timeout {
+                    return false
+                }
+            }
+        }
+        sleep(delay)
+    }
+}
+
 fn is_pid_exists(pid: Pid) -> bool {
     if PathBuf::from(format!("/proc/{pid}")).exists() {
         return true
@@ -381,7 +422,7 @@ fn wait_pid_exit(pid: Pid, timeout: Option<Duration>) -> bool {
 fn wait_mount(pid: Pid, path: &PathBuf, timeout: Duration) -> bool {
     let start_time = Instant::now();
     spawn(move || waitpid(pid, None) );
-    while !path.exists() || !is_mount_point(path).unwrap_or(false) {
+    while !is_mount_point(path).unwrap_or(false) {
         if !is_pid_exists(pid) {
             return false
         } else if start_time.elapsed() >= timeout {
@@ -616,8 +657,8 @@ fn try_set_portable(kind: &str, dir: &PathBuf) {
 
 fn try_read_dotenv(dotenv_path: &PathBuf) {
     if dotenv_path.is_file() {
-        dotenv::from_path(&dotenv_path).ok();
-        if let Ok(data) = read_to_string(&dotenv_path) {
+        dotenv::from_path(dotenv_path).ok();
+        if let Ok(data) = read_to_string(dotenv_path) {
             eprintln!("Read env file: {:?}", dotenv_path.display());
             for string in data.trim().split("\n") {
                 let string = string.trim();
@@ -633,13 +674,14 @@ fn try_read_dotenv(dotenv_path: &PathBuf) {
     }
 }
 
-fn signals_handler(pid: Pid) {
+fn signals_handler(pid: Pid, selfexit: bool) {
     let mut signals = Signals::new([SIGINT, SIGTERM, SIGQUIT]).unwrap();
     let _ = signals.handle();
     for signal in signals.forever() {
         match signal {
             SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
                 let _ = kill(pid, Signal::SIGTERM);
+                if selfexit { exit(0) };
                 break
             }
             _ => {}
@@ -927,9 +969,6 @@ fn main() {
     let mut is_mount_only = false;
     let mut is_extract_run = false;
     let mut is_noclenup = !matches!(URUNTIME_CLEANUP.replace("URUNTIME_CLEANUP=", "=").as_str(), "=1");
-    let mut is_nounmount = !matches!(URUNTIME_MOUNT.replace("URUNTIME_MOUNT=", "=").as_str(), "=1");
-
-    let mut tmp_dir = env::temp_dir();
 
     if get_env_var(&format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase())) == "1" {
         is_extract_run = true
@@ -1029,6 +1068,15 @@ fn main() {
         is_noclenup = true
     }
 
+    let mut remp_umount_delay = "".to_string();
+    let mut is_nounmount = match URUNTIME_MOUNT.replace("URUNTIME_MOUNT=", "=").as_str() {
+        "=0" => { remp_umount_delay = "inf".into(); true }
+        "=1" => { false }
+        "=2" => { remp_umount_delay = get_env_var("REMP_UMOUNT_DELAY"); true  }
+        "=3" => { remp_umount_delay = "sec".into(); true }
+        _ => { false }
+    };
+
     if !is_extract_run && get_env_var("NO_UNMOUNT") == "1" {
         is_nounmount = true
     }
@@ -1046,6 +1094,8 @@ fn main() {
     }
 
     drop(runtime);
+
+    let mut tmp_dir = env::temp_dir();
 
     let first5name: String = self_exe_name.split(".").next()
         .unwrap_or(self_exe_name).chars().take(5).collect();
@@ -1092,25 +1142,32 @@ fn main() {
         }
     }
 
+    let is_tmpdir_exists = is_mount_point(&tmp_dir).unwrap_or(false) ||
+        if let Ok(dir) = tmp_dir.read_dir() {
+            dir.flatten().any(|entry|entry.path().exists())
+        } else { false };
+
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child: child_pid }) => {
-            if is_extract_run {
-                if let Err(err) = waitpid(child_pid, None) {
-                    eprintln!("Failed to extract image: {err}");
+            if !is_tmpdir_exists {
+                if is_extract_run {
+                    if let Err(err) = waitpid(child_pid, None) {
+                        eprintln!("Failed to extract image: {err}");
+                        remove_tmp_dirs(tmp_dirs);
+                        exit(1)
+                    }
+                } else if !wait_mount(child_pid, &tmp_dir, Duration::from_secs(1)) {
                     remove_tmp_dirs(tmp_dirs);
+                    check_extract!(is_mount_only, uruntime_extract, self_exe, {
+                        let err = Command::new(self_exe)
+                            .env(format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase()), "1")
+                            .args(&exec_args)
+                            .exec();
+                        eprintln!("Failed to exec: {:?}: {err}", self_exe);
+                    });
                     exit(1)
                 }
-            } else if !wait_mount(child_pid, &tmp_dir, Duration::from_millis(1000)) {
-                remove_tmp_dirs(tmp_dirs);
-                check_extract!(is_mount_only, uruntime_extract, self_exe, {
-                    let err = Command::new(self_exe)
-                        .env(format!("{}_EXTRACT_AND_RUN", ARG_PFX.to_uppercase()), "1")
-                        .args(&exec_args)
-                        .exec();
-                    eprintln!("Failed to exec: {:?}: {err}", self_exe);
-                });
-                exit(1)
-            }
+            } else { spawn(move || waitpid(child_pid, None) ); }
 
             let mut exit_code = 143;
             if !is_mount_only {
@@ -1150,7 +1207,7 @@ fn main() {
                     .args(&exec_args).spawn().unwrap();
                 let pid = Pid::from_raw(cmd.id() as i32);
 
-                spawn(move || signals_handler(pid) );
+                spawn(move || signals_handler(pid, false) );
 
                 if let Ok(status) = cmd.wait() {
                     if let Some(code) = status.code() {
@@ -1158,7 +1215,7 @@ fn main() {
                     }
                 }
             } else {
-                spawn(move || signals_handler(child_pid) );
+                spawn(move || signals_handler(child_pid, false) );
                 wait_pid_exit(child_pid, None);
             }
 
@@ -1166,16 +1223,30 @@ fn main() {
                 Ok(ForkResult::Parent { child: _ }) => { exit(exit_code) }
                 Ok(ForkResult::Child) => {
                     try_setsid();
+                    spawn(move || signals_handler(child_pid, true) );
 
-                    if !is_extract_run && !is_nounmount && !is_mount_only {
-                        let _ = kill(child_pid, Signal::SIGTERM);
-                    }
                     if is_extract_run {
-                        if !is_noclenup {
+                        if !is_noclenup && !is_tmpdir_exists {
+                            wait_dir_notuse(
+                                &tmp_dir,None,
+                                Some(Duration::from_secs(1)), true
+                            );
                             let _ = remove_dir_all(&tmp_dir);
                         }
-                    } else if !is_nounmount && !is_mount_only {
-                        wait_pid_exit(child_pid, Some(Duration::from_millis(1000)));
+                    } else if !is_extract_run && !is_nounmount && !is_mount_only && !is_tmpdir_exists {
+                        wait_dir_notuse(&tmp_dir, None, None, false);
+                        let _ = kill(child_pid, Signal::SIGTERM);
+                    } else if is_nounmount && !is_extract_run && !is_mount_only && !is_tmpdir_exists && remp_umount_delay != "inf" {
+                        let remp_umount_delay = if remp_umount_delay == "sec" { 1 }
+                        else { 60 * remp_umount_delay.parse::<u64>().unwrap_or(120) };
+                        wait_dir_notuse(
+                            &tmp_dir, None,
+                            Some(Duration::from_secs(remp_umount_delay)), true
+                        );
+                        let _ = kill(child_pid, Signal::SIGTERM);
+                    }
+                    if !is_extract_run && !is_mount_only && !is_tmpdir_exists {
+                        wait_pid_exit(child_pid, Some(Duration::from_secs(1)));
                     }
                     remove_tmp_dirs(tmp_dirs);
                 }
@@ -1186,20 +1257,22 @@ fn main() {
             }
         }
         Ok(ForkResult::Child) => {
-            try_setsid();
+            if !is_tmpdir_exists {
+                try_setsid();
 
-            if let Err(err) = create_tmp_dirs(tmp_dirs) {
-                eprintln!("Failed to create tmp dir: {err}");
-                exit(1)
-            }
+                if let Err(err) = create_tmp_dirs(tmp_dirs) {
+                    eprintln!("Failed to create tmp dir: {err}");
+                    exit(1)
+                }
 
-            unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) };
+                unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) };
 
-            if is_extract_run {
-                extract_image(&embed, &image, tmp_dir, is_extract_run, None)
-            } else {
-                mount_image(&embed, &image, tmp_dir)
-            }
+                if is_extract_run {
+                    extract_image(&embed, &image, tmp_dir, is_extract_run, None)
+                } else {
+                    mount_image(&embed, &image, tmp_dir)
+                }
+            } else { exit(0) }
         }
         Err(err) => {
             eprintln!("Fork error: {err}");

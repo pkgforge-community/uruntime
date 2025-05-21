@@ -87,7 +87,7 @@ fn main() {
         #[cfg(not(feature = "upx"))]
         {
             if asset.ends_with("-upx") {
-                asset = &asset.strip_suffix("-upx").unwrap();
+                asset = asset.strip_suffix("-upx").unwrap();
                 let asset_noupx_path = assets_path.join(asset);
                 if !asset_noupx_path.exists() {
                     let output = Command::new("upx").args([

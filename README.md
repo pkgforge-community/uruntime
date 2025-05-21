@@ -73,11 +73,18 @@ sed -i 's|URUNTIME_CLEANUP=[0-9]|URUNTIME_CLEANUP=1|' /path/uruntime
 
 * `URUNTIME_MOUNT` - Specifies the mount logic
 ```
-# URUNTIME_MOUNT=0 - Disable unmounting of the mount directory for reuse mount point
+# URUNTIME_MOUNT=0 - Reuse mount point and disable unmounting of the mount directory
 sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=0|' /path/uruntime
 
-# URUNTIME_MOUNT=1 - Enable unmounting of the mount directory (default)
+# URUNTIME_MOUNT=1 - Random mount points and unmounting of the mount directory
 sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=1|' /path/uruntime
+
+# URUNTIME_MOUNT=2 - Reuse mount point and unmounting of the mount directory with a delay
+#                    default 120 minutes of inactivity (env var REMP_UMOUNT_DELAY=sec|inf|120)
+
+# URUNTIME_MOUNT=3 - Reuse mount point and unmounting of the mount directory 
+#                    with a one-second delay of inactivity (default)
+sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=3|' /path/uruntime
 ```
 
 <details><summary style="font-size: 15px;"><b>
