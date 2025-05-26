@@ -79,12 +79,12 @@ sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=0|' /path/uruntime
 # URUNTIME_MOUNT=1 - Random mount points and unmounting of the mount directory
 sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=1|' /path/uruntime
 
-# URUNTIME_MOUNT=2 - Reuse mount point and unmounting of the mount directory with a delay
-#                    default 120 minutes of inactivity (env var REMP_UMOUNT_DELAY=sec|inf|120)
+# URUNTIME_MOUNT=2 - Reuse mount point and unmounting of the mount directory 
+#                    with a 30 minutes delay of inactivity
 sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=2|' /path/uruntime
 
 # URUNTIME_MOUNT=3 - Reuse mount point and unmounting of the mount directory 
-#                    with a one-second delay of inactivity (default)
+#                    with a 5 second delay of inactivity (default)
 sed -i 's|URUNTIME_MOUNT=[0-9]|URUNTIME_MOUNT=3|' /path/uruntime
 ```
 
@@ -104,9 +104,11 @@ RunImage runtime usage
      --runtime-help                      Print this help
      --runtime-version                   Print version of Runtime
      --runtime-signature                 Print digital signature embedded in RunImage
-     --runtime-addsign         'SIGN'    Add digital signature to RunImage
+     --runtime-addsign    'SIGN|/file'   Add digital signature to RunImage
      --runtime-updateinfo[rmation]       Print update info embedded in RunImage
-     --runtime-addupdinfo      'INFO'    Add update info to RunImage
+     --runtime-addupdinfo 'INFO|/file'   Add update info to RunImage
+     --runtime-envs                      Print environment variables embedded in RunImage
+     --runtime-addenvs    'ENVS|/file'   Add environment variables to RunImage
      --runtime-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C
 
@@ -148,12 +150,16 @@ RunImage runtime usage
 
     Environment variables:
 
+      URUNTIME                       Path to uruntime
+      URUNTIME_DIR                   Path to uruntime directory
       RUNTIME_EXTRACT_AND_RUN=1      Run the RunImage afer extraction without using FUSE
       NO_CLEANUP=1                   Do not clear the unpacking directory after closing when
                                        using extract and run option for reuse extracted data
       NO_UNMOUNT=1                   Do not unmount the mount directory after closing 
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
+      URUNTIME_TARGET_DIR=/path      Specifies the exact path for mounting or extracting the image
+      REUSE_CHECK_DELAY=5s           Specifies the delay between checks of using the image dir (inf|1|1s|1m|1h)
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_RUNIMAGE=/path          Operate on a target RunImage rather than this file itself
@@ -169,6 +175,7 @@ RunImage runtime usage
       Environment variables can be specified in the env file (see https://crates.io/crates/dotenv)
       and environment variables can also be deleted using `unset ENV_VAR` in the end of the env file:
       "${RUNTIME_NAME}.env"
+      You can also embed environment variables directly into runtime using the --runtime-addenvs option.
 ```
 
 </details> 
@@ -189,9 +196,11 @@ AppImage runtime usage
      --appimage-help                      Print this help
      --appimage-version                   Print version of Runtime
      --appimage-signature                 Print digital signature embedded in AppImage
-     --appimage-addsign         'SIGN'    Add digital signature to AppImage
+     --appimage-addsign    'SIGN|/file'   Add digital signature to AppImage
      --appimage-updateinfo[rmation]       Print update info embedded in AppImage
-     --appimage-addupdinfo      'INFO'    Add update info to AppImage
+     --appimage-addupdinfo 'INFO|/file'   Add update info to AppImage
+     --appimage-envs                      Print environment variables embedded in AppImage
+     --appimage-addenvs    'ENVS|/file'   Add environment variables to AppImage
      --appimage-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C
 
@@ -230,12 +239,16 @@ AppImage runtime usage
 
     Environment variables:
 
+      URUNTIME                       Path to uruntime
+      URUNTIME_DIR                   Path to uruntime directory
       APPIMAGE_EXTRACT_AND_RUN=1     Run the AppImage afer extraction without using FUSE
       NO_CLEANUP=1                   Do not clear the unpacking directory after closing when
                                        using extract and run option for reuse extracted data
       NO_UNMOUNT=1                   Do not unmount the mount directory after closing 
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
+      URUNTIME_TARGET_DIR=/path      Specifies the exact path for mounting or extracting the image
+      REUSE_CHECK_DELAY=5s           Specifies the delay between checks of using the image dir (inf|1|1s|1m|1h)
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_APPIMAGE=/path          Operate on a target AppImage rather than this file itself
@@ -251,6 +264,7 @@ AppImage runtime usage
       Environment variables can be specified in the env file (see https://crates.io/crates/dotenv)
       and environment variables can also be deleted using `unset ENV_VAR` in the end of the env file:
       "${RUNTIME_NAME}.env"
+      You can also embed environment variables directly into runtime using the --appimage-addenvs option.
 ```
 
 </details> 

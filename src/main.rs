@@ -23,6 +23,7 @@ const URUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const URUNTIME_MOUNT: &str = "URUNTIME_MOUNT=3";
 const URUNTIME_CLEANUP: &str = "URUNTIME_CLEANUP=1";
 const URUNTIME_EXTRACT: &str = "URUNTIME_EXTRACT=3";
+const REUSE_CHECK_DELAY: &str = "5s";
 const MAX_EXTRACT_SELF_SIZE: u64 = 350 * 1024 * 1024; // 350 MB
 #[cfg(feature = "dwarfs")]
 const DWARFS_CACHESIZE: &str = "1024M";
@@ -46,6 +47,7 @@ struct Runtime {
     path: PathBuf,
     size: u64,
     headers_bytes: Vec<u8>,
+    envs: String,
 }
 
 #[derive(Debug)]
@@ -298,6 +300,74 @@ and run it with the --{ARG_PFX}-help option for more information");
     };
 }
 
+fn get_section_index(elf: &Elf<'_>, section_name: &str) -> Result<usize> {
+    let section_index = elf.section_headers
+        .iter()
+        .position(|sh| {
+            if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
+                { name == section_name } else { false }
+        })
+        .ok_or(Error::new(InvalidData,
+            format!("Section header with name '{section_name}' not found!")
+        ))?;
+    Ok(section_index)
+}
+
+fn get_section_header(headers_bytes: &[u8], section_name: &str) -> Result<SectionHeader> {
+    let elf = Elf::parse(headers_bytes)
+        .map_err(|err| Error::new(InvalidData, err))?;
+    let section_index = get_section_index(&elf, section_name)?;
+    Ok(elf.section_headers[section_index].clone())
+}
+
+fn get_section_data(headers_bytes: &[u8], section_name: &str) -> Result<String> {
+    let section = &mut get_section_header(headers_bytes, section_name)?;
+    let section_data = &headers_bytes[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
+    if let Ok(data_str) = str::from_utf8(section_data) {
+        Ok(data_str.trim().trim_matches('\0').into())
+    } else {
+        Err(Error::new(InvalidData,
+            format!("Section data is not valid UTF-8: {section_name}")
+        ))
+    }
+}
+
+fn add_section_data(runtime: &Runtime, section_name: &str, exec_args: &[String]) -> Result<()> {
+    if get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())).is_empty() {
+        env::set_var(format!("TARGET_{}", SELF_NAME.to_uppercase()), &runtime.path);
+        mfd_exec("uruntime", &runtime.headers_bytes, exec_args.to_vec());
+    }
+    let section = get_section_header(&runtime.headers_bytes, section_name)?;
+    let offset = section.sh_offset;
+    let original_size = section.sh_size;
+    let file_data: String;
+    let string_bytes = if let Some(section_data) = exec_args.get(1) {
+        if PathBuf::from(section_data).is_file() {
+            file_data = read_to_string(section_data)?.trim().to_string();
+            file_data.as_bytes()
+        } else {
+            section_data.as_bytes()
+        }
+    } else { &[] };
+    let new_size = string_bytes.len() as u64;
+    if new_size > original_size {
+        return Err(Error::new(InvalidData,
+            "New section header data is larger than the section size!"
+        ));
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&runtime.path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    file.write_all(string_bytes)?;
+    if new_size < original_size {
+        let padding_size = original_size - new_size;
+        let padding = vec![0u8; padding_size as usize];
+        file.write_all(&padding)?;
+    }
+    Ok(())
+}
+
 fn get_runtime(path: &PathBuf) -> Result<Runtime> {
     let mut file = File::open(path)?;
     let mut elf_header_raw = [0; 64];
@@ -318,10 +388,16 @@ fn get_runtime(path: &PathBuf) -> Result<Runtime> {
         .last()
         .map(|section| section.sh_offset + section.sh_size)
         .unwrap_or(0);
+    let envs = if let Ok(section_index) = get_section_index(&elf, ".envs") {
+        let section = &elf.section_headers[section_index];
+        let section_data = &headers_bytes[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
+        str::from_utf8(section_data).unwrap_or_default().trim_matches('\0').to_string()
+    } else { "".into() };
     Ok(Runtime {
         path: path.to_path_buf(),
-        headers_bytes: headers_bytes.clone(),
+        headers_bytes,
         size: section_table_end.max(last_section_end),
+        envs,
     })
 }
 
@@ -655,19 +731,56 @@ fn try_set_portable(kind: &str, dir: &PathBuf) {
     }
 }
 
-fn try_read_dotenv(dotenv_path: &PathBuf) {
+fn parse_reuse_check_delay(delay: &str) -> Option<Duration> {
+    if delay == "inf" {
+        return None
+    }
+    let default_delay = Some(Duration::from_secs(1));
+    let mut chars = delay.chars();
+    let mut num_part = String::new();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            num_part.push(c);
+        } else {
+            let suffix = c.to_lowercase();
+            if chars.next().is_some() {
+                return default_delay;
+            }
+            let num: u64 = num_part.parse().unwrap_or(1);
+            let multiplier = match suffix.to_string().as_str() {
+                "s" => 1,
+                "m" => 60,
+                "h" => 3600,
+                _ => return default_delay,
+            };
+            return Some(Duration::from_secs(num * multiplier))
+        }
+    }
+    if !num_part.is_empty() {
+        num_part.parse().ok().map(Duration::from_secs)
+    } else { default_delay }
+}
+
+fn try_read_dotenv(dotenv_path: &PathBuf, dotenv_string: &str) {
+    fn try_unset_env_data(data: &str) {
+        for string in data.trim().split('\n') {
+            let string = string.trim();
+            if string.starts_with("unset ") {
+                for var_name in string.split_whitespace().skip(1) {
+                    env::remove_var(var_name);
+                }
+            }
+        }
+    }
+    if !dotenv_string.is_empty() {
+        dotenv::from_string(dotenv_string).ok();
+        try_unset_env_data(dotenv_string)
+    }
     if dotenv_path.is_file() {
         dotenv::from_path(dotenv_path).ok();
         if let Ok(data) = read_to_string(dotenv_path) {
             eprintln!("Read env file: {:?}", dotenv_path.display());
-            for string in data.trim().split("\n") {
-                let string = string.trim();
-                if string.starts_with("unset ") {
-                    for var_name in string.split_whitespace().skip(1) {
-                        env::remove_var(var_name)
-                    }
-                }
-            }
+            try_unset_env_data(&data)
         } else {
             eprintln!("Failed to read env file: {:?}", dotenv_path.display())
         }
@@ -687,62 +800,6 @@ fn signals_handler(pid: Pid, selfexit: bool) {
             _ => {}
         }
     }
-}
-
-fn get_section_header(headers_bytes: &[u8], section_name: &str) -> Result<SectionHeader> {
-    let elf = Elf::parse(headers_bytes)
-        .map_err(|err| Error::new(InvalidData, err))?;
-    let section_index = elf.section_headers
-        .iter()
-        .position(|sh| {
-            if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
-                { name == section_name } else { false }
-        })
-        .ok_or(Error::new(InvalidData,
-            format!("Section header with name '{section_name}' not found!")
-        ))?;
-    Ok(elf.section_headers[section_index].clone())
-}
-
-fn get_section_data(headers_bytes: Vec<u8>, section_name: &str) -> Result<String> {
-    let section = &mut get_section_header(&headers_bytes, section_name)?;
-    let section_data = &headers_bytes[section.sh_offset as usize..(section.sh_offset + section.sh_size) as usize];
-    if let Ok(data_str) = str::from_utf8(section_data) {
-        Ok(data_str.trim().into())
-    } else {
-        Err(Error::new(InvalidData,
-            format!("Section data is not valid UTF-8: {section_name}")
-        ))
-    }
-}
-
-fn add_section_data(runtime: &Runtime, section_name: &str, exec_args: &[String]) -> Result<()> {
-    if get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())).is_empty() {
-        env::set_var(format!("TARGET_{}", SELF_NAME.to_uppercase()), &runtime.path);
-        mfd_exec("uruntime", &runtime.headers_bytes, exec_args.to_vec());
-    }
-    let section = get_section_header(&runtime.headers_bytes, section_name)?;
-    let offset = section.sh_offset;
-    let original_size = section.sh_size;
-    let string_bytes = if let Some(section_data) = exec_args.get(1)
-        { section_data.as_bytes() } else { &[] };
-    let new_size = string_bytes.len() as u64;
-    if new_size > original_size {
-        return Err(Error::new(InvalidData,
-            "New section header data is larger than the section size!"
-        ));
-    }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .open(&runtime.path)?;
-    file.seek(SeekFrom::Start(offset))?;
-    file.write_all(string_bytes)?;
-    if new_size < original_size {
-        let padding_size = original_size - new_size;
-        let padding = vec![0u8; padding_size as usize];
-        file.write_all(&padding)?;
-    }
-    Ok(())
 }
 
 fn hash_string(data: &str) -> String {
@@ -779,9 +836,11 @@ fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_confi
      --{ARG_PFX}-help                      Print this help
      --{ARG_PFX}-version                   Print version of Runtime
      --{ARG_PFX}-signature                 Print digital signature embedded in {SELF_NAME}
-     --{ARG_PFX}-addsign         'SIGN'    Add digital signature to {SELF_NAME}
+     --{ARG_PFX}-addsign    'SIGN|/file'   Add digital signature to {SELF_NAME}
      --{ARG_PFX}-updateinfo[rmation]       Print update info embedded in {SELF_NAME}
-     --{ARG_PFX}-addupdinfo      'INFO'    Add update info to {SELF_NAME}
+     --{ARG_PFX}-addupdinfo 'INFO|/file'   Add update info to {SELF_NAME}
+     --{ARG_PFX}-envs                      Print environment variables embedded in {SELF_NAME}
+     --{ARG_PFX}-addenvs    'ENVS|/file'   Add environment variables to {SELF_NAME}
      --{ARG_PFX}-mount                     Mount embedded filesystem image and print
                                              mount point and wait for kill with Ctrl-C",
     env!("CARGO_PKG_DESCRIPTION"), env!("CARGO_PKG_REPOSITORY"));
@@ -833,12 +892,16 @@ fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_confi
 
     println!("\n    Environment variables:
 
+      URUNTIME                       Path to uruntime
+      URUNTIME_DIR                   Path to uruntime directory
       {}_EXTRACT_AND_RUN=1      Run the {SELF_NAME} afer extraction without using FUSE
       NO_CLEANUP=1                   Do not clear the unpacking directory after closing when
                                        using extract and run option for reuse extracted data
       NO_UNMOUNT=1                   Do not unmount the mount directory after closing
                                       for reuse mount point
       TMPDIR=/path                   Specifies a custom path for mounting or extracting the image
+      URUNTIME_TARGET_DIR=/path      Specifies the exact path for mounting or extracting the image
+      REUSE_CHECK_DELAY=5s           Specifies the delay between checks of using the image dir (inf|1|1s|1m|1h)
       FUSERMOUNT_PROG=/path          Specifies a custom path for fusermount
       ENABLE_FUSE_DEBUG=1            Enables debug mode for the mounted filesystem
       TARGET_{}=/path          Operate on a target {SELF_NAME} rather than this file itself
@@ -857,7 +920,9 @@ fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_confi
     println!("
       Environment variables can be specified in the env file (see https://crates.io/crates/dotenv)
       and environment variables can also be deleted using `unset ENV_VAR` in the end of the env file:
-      {0:?}", self_exe_dotenv)
+      {0:?}
+      You can also embed environment variables directly into runtime using the --{ARG_PFX}-addenvs option."
+      , self_exe_dotenv)
 }
 
 fn main() {
@@ -947,8 +1012,9 @@ fn main() {
         }
     }
 
-    let target_image = PathBuf::from(get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())));
-    let self_exe = if target_image.is_file() { &target_image } else { &current_exe().unwrap() };
+    let uruntime = &current_exe().unwrap();
+    let target_image = &PathBuf::from(get_env_var(&format!("TARGET_{}", SELF_NAME.to_uppercase())));
+    let self_exe = if target_image.is_file() { target_image } else { uruntime };
 
     let runtime = get_runtime(self_exe).unwrap_or_else(|err|{
         eprintln!("Failed to get runtime: {err}");
@@ -956,6 +1022,7 @@ fn main() {
     });
     let runtime_size = runtime.size;
 
+    let uruntime_dir = uruntime.parent().unwrap();
     let self_exe_dir = self_exe.parent().unwrap();
     let self_exe_name = self_exe.file_name().unwrap().to_str().unwrap();
 
@@ -963,8 +1030,11 @@ fn main() {
     let portable_share = &self_exe_dir.join(format!("{self_exe_name}.share"));
     let portable_config = &self_exe_dir.join(format!("{self_exe_name}.config"));
 
+    env::set_var("URUNTIME", uruntime);
+    env::set_var("URUNTIME_DIR", uruntime_dir);
+
     let self_exe_dotenv = &self_exe_dir.join(format!("{self_exe_name}.env"));
-    try_read_dotenv(self_exe_dotenv);
+    try_read_dotenv(self_exe_dotenv, &runtime.envs);
 
     let mut is_mount_only = false;
     let mut is_extract_run = false;
@@ -1007,7 +1077,7 @@ fn main() {
             }
             arg if arg == format!("--{ARG_PFX}-updateinfo") ||
                            arg == format!("--{ARG_PFX}-updateinformation") => {
-                let updateinfo = get_section_data(runtime.headers_bytes, ".upd_info")
+                let updateinfo = get_section_data(&runtime.headers_bytes, ".upd_info")
                     .unwrap_or_else(|err|{
                         eprintln!("Failed to get update info: {err}");
                         exit(1)
@@ -1023,7 +1093,7 @@ fn main() {
                 return
             }
             arg if arg == format!("--{ARG_PFX}-signature") => {
-                let signature = get_section_data(runtime.headers_bytes, ".sha256_sig")
+                let signature = get_section_data(&runtime.headers_bytes, ".sha256_sig")
                     .unwrap_or_else(|err|{
                         eprintln!("Failed to get signature info: {err}");
                         exit(1)
@@ -1034,6 +1104,17 @@ fn main() {
             arg if arg == format!("--{ARG_PFX}-addsign") => {
                 if let Err(err) = add_section_data(&runtime, ".sha256_sig", &exec_args) {
                     eprintln!("Failed to add signature info: {err}");
+                    exit(1)
+                };
+                return
+            }
+            arg if arg == format!("--{ARG_PFX}-envs") => {
+                println!("{}", runtime.envs);
+                return
+            }
+            arg if arg == format!("--{ARG_PFX}-addenvs") => {
+                if let Err(err) = add_section_data(&runtime, ".envs", &exec_args) {
+                    eprintln!("Failed to add envs: {err}");
                     exit(1)
                 };
                 return
@@ -1051,82 +1132,6 @@ fn main() {
         exit(1)
     });
 
-    let uruntime_extract = match URUNTIME_EXTRACT.replace("URUNTIME_EXTRACT=", "=").as_str() {
-        "=1" => { is_extract_run = true; 1 }
-        "=2" => { 2 }
-        "=3" => { 3 }
-        _ => { 0 }
-    };
-
-    if (!is_extract_run || is_mount_only) && !check_fuse() {
-        check_extract!(is_mount_only, uruntime_extract, self_exe, {
-            is_extract_run = true
-        });
-    }
-
-    if is_extract_run && get_env_var("NO_CLEANUP") == "1" {
-        is_noclenup = true
-    }
-
-    let mut remp_umount_delay = "".to_string();
-    let mut is_nounmount = match URUNTIME_MOUNT.replace("URUNTIME_MOUNT=", "=").as_str() {
-        "=0" => { remp_umount_delay = "inf".into(); true }
-        "=1" => { false }
-        "=2" => { remp_umount_delay = get_env_var("REMP_UMOUNT_DELAY"); true  }
-        "=3" => { remp_umount_delay = "sec".into(); true }
-        _ => { false }
-    };
-
-    if !is_extract_run && get_env_var("NO_UNMOUNT") == "1" {
-        is_nounmount = true
-    }
-
-    let mut self_hash: String = "".into();
-    if is_extract_run || is_nounmount {
-        let uid = unsafe { libc::getuid() };
-        self_hash = hash_string(&(
-            xxh3_64(&runtime.headers_bytes) as u32 +
-            fast_hash_file(&image.path, image.offset).unwrap_or_else(|err|{
-                eprintln!("Failed to get image hash: {err}");
-                exit(1)}) +
-            uid
-        ).to_string())
-    }
-
-    drop(runtime);
-
-    let mut tmp_dir = env::temp_dir();
-
-    let first5name: String = self_exe_name.split(".").next()
-        .unwrap_or(self_exe_name).chars().take(5).collect();
-    cfg_if! {
-        if #[cfg(feature = "appimage")] {
-            let tmp_dir_name: String = if is_extract_run {
-                format!("appimage_extracted_{first5name}{self_hash}")
-            } else if is_nounmount {
-                format!(".mount_{first5name}remp{self_hash}")
-            } else {
-                format!(".mount_{first5name}{}", random_string(6))
-            };
-            tmp_dir = tmp_dir.join(tmp_dir_name);
-            let tmp_dirs = vec![&tmp_dir];
-        } else {
-            let uid = unsafe { libc::getuid() };
-            let ruid_dir = tmp_dir.join(format!(".r{uid}"));
-            let mnt_dir = ruid_dir.join("mnt");
-            let tmp_dir_name: String = if is_extract_run {
-                format!("{first5name}extr{self_hash}")
-            } else if is_nounmount {
-                format!("{first5name}remp{self_hash}")
-            } else {
-                format!("{first5name}{}", random_string(6))
-            };
-            tmp_dir = mnt_dir.join(tmp_dir_name);
-            let tmp_dirs = vec![&tmp_dir, &mnt_dir, &ruid_dir];
-        }
-    }
-    drop(first5name);
-
     if !arg1.is_empty() {
         match arg1 {
             arg if arg == format!("--{ARG_PFX}-extract") => {
@@ -1135,11 +1140,112 @@ fn main() {
                 return
             }
             arg if arg == format!("--{ARG_PFX}-mount") => {
-                println!("{}", tmp_dir.display());
                 is_mount_only = true
             }
             _ => {}
         }
+    }
+
+    let uruntime_extract =
+    match URUNTIME_EXTRACT.replace("URUNTIME_EXTRACT=", "=").as_str() {
+        "=1" => { is_extract_run = true; 1 }
+        "=2" => { 2 }
+        "=3" => { 3 }
+        _ => { 0 }
+    };
+
+    let mut reuse_check_delay = get_env_var("REUSE_CHECK_DELAY");
+
+    let (mut is_remp_mount, default_delay) =
+    match URUNTIME_MOUNT.replace("URUNTIME_MOUNT=", "=").as_str() {
+        "=0" => (true, if is_extract_run { Some(REUSE_CHECK_DELAY) } else { Some("inf") }),
+        "=1" => (false, None),
+        "=2" => (true, Some("30m")),
+        "=3" => (true, Some(REUSE_CHECK_DELAY)),
+        _ => (false, None),
+    };
+
+    if let Some(default) = default_delay {
+        if reuse_check_delay.is_empty() {
+            reuse_check_delay = default.into();
+        }
+    };
+
+    let target_dir = get_env_var("URUNTIME_TARGET_DIR");
+    let mut tmp_dir: PathBuf;
+    let tmp_dirs: Vec<&PathBuf>;
+    #[cfg(not(feature = "appimage"))]
+    let ruid_dir: PathBuf;
+    #[cfg(not(feature = "appimage"))]
+    let mnt_dir: PathBuf;
+
+    if target_dir.is_empty() {
+        tmp_dir = env::temp_dir();
+        let mut self_hash = "".to_string();
+        let first5name: String = self_exe_name.split(".").next()
+        .unwrap_or(self_exe_name).chars().take(5).collect();
+        if is_extract_run || is_remp_mount {
+            let uid = unsafe { libc::getuid() };
+            self_hash = hash_string(&(
+                xxh3_64(&runtime.headers_bytes) as u32 +
+                fast_hash_file(&image.path, image.offset).unwrap_or_else(|err|{
+                    eprintln!("Failed to get image hash: {err}");
+                    exit(1)}) +
+                uid
+            ).to_string())
+        }
+
+        cfg_if! {
+            if #[cfg(feature = "appimage")] {
+                let tmp_dir_name: String = if is_extract_run && !is_mount_only {
+                    format!("appimage_extracted_{first5name}{self_hash}")
+                } else if is_remp_mount {
+                    format!(".mount_{first5name}remp{self_hash}")
+                } else {
+                    format!(".mount_{first5name}{}", random_string(6))
+                };
+                tmp_dir = tmp_dir.join(tmp_dir_name);
+                tmp_dirs = vec![&tmp_dir];
+            } else {
+                let uid = unsafe { libc::getuid() };
+                ruid_dir = tmp_dir.join(format!(".r{uid}"));
+                 mnt_dir = ruid_dir.join("mnt");
+                let tmp_dir_name: String = if is_extract_run && !is_mount_only {
+                    format!("{first5name}extr{self_hash}")
+                } else if is_remp_mount {
+                    format!("{first5name}remp{self_hash}")
+                } else {
+                    format!("{first5name}{}", random_string(6))
+                };
+                tmp_dir = mnt_dir.join(tmp_dir_name);
+                tmp_dirs = vec![&tmp_dir, &mnt_dir, &ruid_dir];
+            }
+        }
+        drop(first5name);
+    } else {
+        env::remove_var("URUNTIME_TARGET_DIR");
+        tmp_dir = PathBuf::from(target_dir);
+        tmp_dirs = vec![&tmp_dir]
+    }
+
+    drop(runtime);
+
+    if (!is_extract_run || is_mount_only) && !check_fuse() {
+        check_extract!(is_mount_only, uruntime_extract, self_exe, {
+            is_extract_run = true
+        });
+    }
+
+    if is_mount_only {
+        println!("{}", tmp_dir.display());
+        is_extract_run = false
+    } else if is_extract_run {
+        is_noclenup = get_env_var("NO_CLEANUP") == "1"
+    }
+
+    if !is_extract_run && get_env_var("NO_UNMOUNT") == "1" {
+        is_remp_mount = true;
+        reuse_check_delay = "inf".into()
     }
 
     let is_tmpdir_exists = is_mount_point(&tmp_dir).unwrap_or(false) ||
@@ -1214,45 +1320,43 @@ fn main() {
                         exit_code = code
                     }
                 }
-            } else {
+            } else if !is_tmpdir_exists {
                 spawn(move || signals_handler(child_pid, false) );
                 wait_pid_exit(child_pid, None);
-            }
+            } else { exit(0) }
 
-            match unsafe { fork() } {
-                Ok(ForkResult::Parent { child: _ }) => { exit(exit_code) }
-                Ok(ForkResult::Child) => {
-                    try_setsid();
-                    spawn(move || signals_handler(child_pid, true) );
+            if is_tmpdir_exists { exit(exit_code) } else {
+                match unsafe { fork() } {
+                    Ok(ForkResult::Parent { child: _ }) => { exit(exit_code) }
+                    Ok(ForkResult::Child) => {
+                        try_setsid();
+                        spawn(move || signals_handler(child_pid, true) );
 
-                    if is_extract_run {
-                        if !is_noclenup && !is_tmpdir_exists {
-                            wait_dir_notuse(
-                                &tmp_dir,None,
-                                Some(Duration::from_secs(1)), true
-                            );
-                            let _ = remove_dir_all(&tmp_dir);
+                        let is_mount = !is_extract_run && !is_mount_only;
+                        let reuse_check_delay = parse_reuse_check_delay(&reuse_check_delay);
+
+                        if is_extract_run {
+                            if !is_noclenup && reuse_check_delay.is_some() {
+                                wait_dir_notuse(&tmp_dir,None, reuse_check_delay, true);
+                                let _ = remove_dir_all(&tmp_dir);
+                            }
+                        } else if !is_remp_mount && is_mount {
+                            wait_dir_notuse(&tmp_dir, None, None, false);
+                            let _ = kill(child_pid, Signal::SIGTERM);
+                        } else if is_remp_mount && is_mount && reuse_check_delay.is_some() {
+                            wait_dir_notuse(&tmp_dir, None, reuse_check_delay, true);
+                            let _ = kill(child_pid, Signal::SIGTERM);
                         }
-                    } else if !is_extract_run && !is_nounmount && !is_mount_only && !is_tmpdir_exists {
-                        wait_dir_notuse(&tmp_dir, None, None, false);
-                        let _ = kill(child_pid, Signal::SIGTERM);
-                    } else if is_nounmount && !is_extract_run && !is_mount_only && !is_tmpdir_exists && remp_umount_delay != "inf" {
-                        let remp_umount_delay = if remp_umount_delay == "sec" { 1 }
-                        else { 60 * remp_umount_delay.parse::<u64>().unwrap_or(120) };
-                        wait_dir_notuse(
-                            &tmp_dir, None,
-                            Some(Duration::from_secs(remp_umount_delay)), true
-                        );
-                        let _ = kill(child_pid, Signal::SIGTERM);
+                        if is_mount {
+                            wait_pid_exit(child_pid, Some(Duration::from_secs(1)));
+                        }
+                        remove_tmp_dirs(tmp_dirs);
+                        exit(0)
                     }
-                    if !is_extract_run && !is_mount_only && !is_tmpdir_exists {
-                        wait_pid_exit(child_pid, Some(Duration::from_secs(1)));
+                    Err(err) => {
+                        eprintln!("Fork error: {err}");
+                        exit(1)
                     }
-                    remove_tmp_dirs(tmp_dirs);
-                }
-                Err(err) => {
-                    eprintln!("Fork error: {err}");
-                    exit(1)
                 }
             }
         }

@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     io::{Seek, SeekFrom, Write},
     process::{exit, Command, Stdio},
-    fs::{File, create_dir_all, remove_file, rename, OpenOptions},
+    fs::{create_dir_all, rename, OpenOptions},
 };
 
 
@@ -131,32 +131,24 @@ fn add_sections(path: &PathBuf) -> Result<(), DynError> {
         .is_ok()
     {
         eprint!(" add sections: ");
-        let new_sections = vec![
-            ".digest_md5",
-            ".upd_info",
-            ".sha256_sig",
-            ".sig_key",
-        ];
 
-        let emptydata = PathBuf::from("emptydata");
-        for section_name in new_sections {
-            let mut section_data = format!("data{section_name}");
-            if !Path::new(&section_data).exists() {
-                if !emptydata.exists() {
-                    File::create(&emptydata)?;
+        if let Ok(dir) = sections_dir().read_dir() {
+            let mut objcopy_args = Vec::new();
+            for entry in dir.flatten() {
+                let section_file = entry.path();
+                if section_file.is_file() {
+                    let section_name = format!(".{}", section_file.file_name().unwrap_or_default().to_string_lossy());
+                    objcopy_args.append(&mut vec![
+                        format!("--add-section={section_name}={}", section_file.display()),
+                        format!("--set-section-flags={section_name}=noload,readonly"),
+                    ]);
                 }
-                section_data = emptydata.to_str().unwrap().to_string()
             }
-            let status = Command::new("llvm-objcopy").args([
-                &format!("--add-section={section_name}={section_data}"),
-                &format!("--set-section-flags={section_name}=noload,readonly"),
-            ]).arg(path).status()?;
+            let status = Command::new("llvm-objcopy")
+                .args(objcopy_args).arg(path).status()?;
             if !status.success() {
                 Err("failed to add sections")?;
             }
-        }
-        if emptydata.exists() {
-            remove_file(emptydata)?;
         }
         eprint!("OK");
     } else {
@@ -270,4 +262,8 @@ fn project_root() -> PathBuf {
 
 fn dist_dir() -> PathBuf {
     project_root().join("dist")
+}
+
+fn sections_dir() -> PathBuf {
+    project_root().join("sections")
 }
