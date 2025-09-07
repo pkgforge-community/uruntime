@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 
 
 #[cfg(feature = "dwarfs")]
-const DWARFS_VERSION: &str = "0.12.4";
+const DWARFS_VERSION: &str = "0.13.0";
 #[cfg(feature = "squashfs")]
 const SQUASHFS_TOOLS_VERSION: &str = "4.6.1";
 #[cfg(feature = "squashfs")]
@@ -39,9 +39,9 @@ fn main() {
         {
             cfg_if! {
                 if #[cfg(feature = "lite")] {
-                    ("dwarfs-fuse-extract-upx", format!("https://github.com/mhx/dwarfs/releases/download/v{0}/dwarfs-fuse-extract-{0}-Linux-{arch}", DWARFS_VERSION))
+                    ("dwarfs-fuse-extract", format!("https://github.com/mhx/dwarfs/releases/download/v{0}/dwarfs-fuse-extract-{0}-Linux-{arch}", DWARFS_VERSION))
                 } else {
-                    ("dwarfs-universal-upx", format!("https://github.com/mhx/dwarfs/releases/download/v{0}/dwarfs-universal-{0}-Linux-{arch}", DWARFS_VERSION))
+                    ("dwarfs-universal", format!("https://github.com/mhx/dwarfs/releases/download/v{0}/dwarfs-universal-{0}-Linux-{arch}", DWARFS_VERSION))
                 }
             }
         },
@@ -65,7 +65,11 @@ fn main() {
         #[cfg(feature = "upx")]
         if !asset.ends_with("-upx") {
             asset_path = assets_path.join(format!("{asset}-upx"));
-            asset_url = format!("{}-upx", asset_url)
+            if asset.contains("dwarfs") {
+                asset_url = format!("{}.upx", asset_url)
+            } else {
+                asset_url = format!("{}-upx", asset_url)
+            }
         }
 
         if !asset_path.exists() {
