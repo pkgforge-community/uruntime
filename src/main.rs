@@ -711,23 +711,21 @@ fn extract_image(embed: &Embed, image: &Image, mut extract_dir: PathBuf, is_extr
     }
 }
 
-fn try_set_portable(kind: &str, dir: &PathBuf) {
+fn try_set_portable_dir(dir: &PathBuf, env_var: &str, default_path: Option<&str>) {
+    let real_env_var = format!("REAL_{}", env_var);
     if dir.is_dir() {
-        match kind {
-            "home" => {
-                eprintln!("Setting $HOME to {:?}", dir);
-                env::set_var("HOME", dir)
+        if get_env_var(&real_env_var).is_empty() {
+            if let Ok(current_value) = env::var(env_var) {
+                env::set_var(&real_env_var, current_value);
+            } else if let Some(default) = default_path {
+                if let Ok(home) = env::var("HOME") {
+                    let default_dir = PathBuf::from(home).join(default);
+                    env::set_var(&real_env_var, default_dir);
+                }
             }
-            "config" => {
-                eprintln!("Setting $XDG_CONFIG_HOME to {:?}", dir);
-                env::set_var("XDG_CONFIG_HOME", dir)
-            }
-            "share" => {
-                eprintln!("Setting $XDG_DATA_HOME to {:?}", dir);
-                env::set_var("XDG_DATA_HOME", dir)
-            }
-            _ => {}
         }
+        eprintln!("Setting ${} to {:?}", env_var, dir);
+        env::set_var(env_var, dir);
     }
 }
 
@@ -821,7 +819,7 @@ fn fast_hash_file(path: &PathBuf, offset: u64) -> Result<u32> {
     Ok(xxh3_64(&buffer) as u32)
 }
 
-fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_config: &PathBuf, self_exe_dotenv: &PathBuf) {
+fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_config: &PathBuf, portable_cache: &PathBuf, self_exe_dotenv: &PathBuf) {
     println!("{} v{URUNTIME_VERSION}
    Repository: {}
 
@@ -833,6 +831,7 @@ fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_confi
      --{ARG_PFX}-portable-home             Create a portable home folder to use as $HOME
      --{ARG_PFX}-portable-share            Create a portable share folder to use as $XDG_DATA_HOME
      --{ARG_PFX}-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
+     --{ARG_PFX}-portable-cache            Create a portable cache folder to use as $XDG_CACHE_HOME
      --{ARG_PFX}-help                      Print this help
      --{ARG_PFX}-version                   Print version of Runtime
      --{ARG_PFX}-signature                 Print digital signature embedded in {SELF_NAME}
@@ -883,12 +882,15 @@ fn print_usage(portable_home: &PathBuf, portable_share: &PathBuf, portable_confi
       for portable-config:
       {:?}
 
+      for portable-cache:
+      {:?}
+
       Or you can invoke this {SELF_NAME} with the --{ARG_PFX}-portable-home or
-      --{ARG_PFX}-portable-share or --{ARG_PFX}-portable-config option,
-      which will create this directory for you.
+      --{ARG_PFX}-portable-share or --{ARG_PFX}-portable-config or
+      --{ARG_PFX}-portable-cache option, which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
       application contained inside this {SELF_NAME} to store its data in this
-      directory rather than in your home directory", portable_home, portable_share, portable_config);
+      directory rather than in your home directory", portable_home, portable_share, portable_config, portable_cache);
 
     println!("\n    Environment variables:
 
@@ -1029,6 +1031,7 @@ fn main() {
     let portable_home = &self_exe_dir.join(format!("{self_exe_name}.home"));
     let portable_share = &self_exe_dir.join(format!("{self_exe_name}.share"));
     let portable_config = &self_exe_dir.join(format!("{self_exe_name}.config"));
+    let portable_cache = &self_exe_dir.join(format!("{self_exe_name}.cache"));
 
     env::set_var("URUNTIME", uruntime);
     env::set_var("URUNTIME_DIR", uruntime_dir);
@@ -1047,7 +1050,7 @@ fn main() {
     if !arg1.is_empty() {
         match arg1 {
             arg if arg == format!("--{ARG_PFX}-help") => {
-                print_usage(portable_home, portable_share, portable_config, self_exe_dotenv);
+                print_usage(portable_home, portable_share, portable_config, portable_cache, self_exe_dotenv);
                 return
             }
             arg if arg == format!("--{ARG_PFX}-portable-home") => {
@@ -1069,6 +1072,13 @@ fn main() {
                     eprintln!("Failed to create portable config directory: {:?}: {err}", portable_config)
                 }
                 println!("Portable config directory created: {:?}", portable_config);
+                return
+            }
+            arg if arg == format!("--{ARG_PFX}-portable-cache") => {
+                if let Err(err) = create_dir(portable_cache) {
+                    eprintln!("Failed to create portable cache directory: {:?}: {err}", portable_cache)
+                }
+                println!("Portable cache directory created: {:?}", portable_cache);
                 return
             }
             arg if arg == format!("--{ARG_PFX}-offset") => {
@@ -1305,9 +1315,10 @@ fn main() {
                 }
                 env::set_var("OWD", getcwd().unwrap());
 
-                try_set_portable("home", portable_home);
-                try_set_portable("share", portable_share);
-                try_set_portable("config", portable_config);
+                try_set_portable_dir(portable_home, "HOME", None);
+                try_set_portable_dir(portable_share, "XDG_DATA_HOME", Some(".local/share"));
+                try_set_portable_dir(portable_config, "XDG_CONFIG_HOME", Some(".config"));
+                try_set_portable_dir(portable_cache, "XDG_CACHE_HOME", Some(".cache"));
 
                 let mut cmd = Command::new(run.canonicalize().unwrap())
                     .args(&exec_args).spawn().unwrap();
