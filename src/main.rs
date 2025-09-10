@@ -1315,10 +1315,10 @@ fn main() {
                 }
                 env::set_var("OWD", getcwd().unwrap());
 
-                try_set_portable_dir(portable_home, "HOME", None);
                 try_set_portable_dir(portable_share, "XDG_DATA_HOME", Some(".local/share"));
                 try_set_portable_dir(portable_config, "XDG_CONFIG_HOME", Some(".config"));
                 try_set_portable_dir(portable_cache, "XDG_CACHE_HOME", Some(".cache"));
+                try_set_portable_dir(portable_home, "HOME", None);
 
                 let mut cmd = Command::new(run.canonicalize().unwrap())
                     .args(&exec_args).spawn().unwrap();
