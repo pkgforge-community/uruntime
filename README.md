@@ -101,6 +101,7 @@ RunImage runtime usage
      --runtime-portable-home             Create a portable home folder to use as $HOME
      --runtime-portable-share            Create a portable share folder to use as $XDG_DATA_HOME
      --runtime-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
+     --runtime-portable-cache            Create a portable cache folder to use as $XDG_CACHE_HOME
      --runtime-help                      Print this help
      --runtime-version                   Print version of Runtime
      --runtime-signature                 Print digital signature embedded in RunImage
@@ -140,10 +141,13 @@ RunImage runtime usage
 
       for portable-config:
       "${RUNTIME_NAME}.config"
+      
+      for portable-cache:
+      "${RUNTIME_NAME}.cache"
 
       Or you can invoke this RunImage with the --runtime-portable-home or
-      --runtime-portable-share or --runtime-portable-config option,
-      which will create this directory for you.
+      --runtime-portable-share or --runtime-portable-config or
+      --runtime-portable-cache option, which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
       application contained inside this RunImage to store its data in this
       directory rather than in your home directory
@@ -193,6 +197,7 @@ AppImage runtime usage
      --appimage-portable-home             Create a portable home folder to use as $HOME
      --appimage-portable-share            Create a portable share folder to use as $XDG_DATA_HOME
      --appimage-portable-config           Create a portable config folder to use as $XDG_CONFIG_HOME
+     --appimage-portable-cache            Create a portable cache folder to use as $XDG_CACHE_HOME
      --appimage-help                      Print this help
      --appimage-version                   Print version of Runtime
      --appimage-signature                 Print digital signature embedded in AppImage
@@ -229,10 +234,13 @@ AppImage runtime usage
 
       for portable-config:
       "${RUNTIME_NAME}.config"
+      
+      for portable-cache:
+      "${RUNTIME_NAME}.cache"
 
       Or you can invoke this AppImage with the --appimage-portable-home or
-      --appimage-portable-share or --appimage-portable-config option,
-      which will create this directory for you.
+      --appimage-portable-share or --appimage-portable-config or
+      --appimage-portable-cache option, which will create this directory for you.
       As long as the directory exists and is neither moved nor renamed, the
       application contained inside this AppImage to store its data in this
       directory rather than in your home directory
